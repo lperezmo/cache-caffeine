@@ -49,7 +49,7 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 | `/caffeine wake` | wake Claude just after the usage limit resets |
 | `/caffeine wake 14:30` | wake at a time (`2:30pm`, `+90m`); `wake off` cancels |
 | `/caffeine wake prompt <text>` | what Claude is told on waking |
-| `/caffeine wake auto` / `awake` / `push` | book the wake by itself at the limit; keep the computer awake until it; a phone notification when it fires |
+| `/caffeine wake auto` / `push` | book the wake by itself at the limit; a phone notification when it fires |
 | `/caffeine status` | what it is doing and whether the last poke found the cache warm |
 
 ## What it does and does not do
@@ -60,7 +60,7 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 - It turns itself off after 8 hours without a turn of your own, unless you confirm `/caffeine forever` for that run (change the length with `/caffeine idle`).
 - **What it reads:** the session's own usage figures from Claude Code (token counts per request, the running cost estimate, the 5-hour and weekly limit windows) and three environment variables, `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M` and `ENABLE_PROMPT_CACHING_1H`. From those it works out the cache TTL: what a request cost (a 1-hour write costs 2x input, a 5-minute one 1.25x), else the variables, else request timing (the cache still read after more than 5 minutes idle means 1 hour), else Claude Code's default for your plan. It reads no files and makes no network requests of its own.
 - **Tools it calls itself:** `CronCreate`, `CronList` and `CronDelete`, only for the wake (book it, find it again after `--resume`, cancel it); `PushNotification`, once, when a wake fires (`/caffeine wake push off` stops it); `AskUserQuestion`, to confirm `/caffeine forever`.
-- **Programs it starts:** only while a wake is booked, one fixed command that keeps the computer from sleeping for up to 6 hours and starts again if the wake is further off: on Windows `powershell` calling `SetThreadExecutionState`, on macOS `caffeinate -i -t 21600`, on Linux `systemd-inhibit ... sleep 21600`. It ends when the wake fires or is cancelled. `/caffeine wake awake off` turns it off.
+- **Programs it starts:** none. It does not keep the computer awake: a wake (and the pokes) need it on and the session open, so set your power settings to stay awake if you rely on them.
 - **Hooks that see other events:** `prompt.submit` only notices its own wake prompt firing (and clears the "limit hit" flag on yours); it changes nothing. `classic.StopFailure` only notices a reply that failed on the usage limit, to offer the wake. `turn.step` reads each request's usage and leaves the request as it is. `session.compact` only notes that a compaction happened.
 - The session has to stay open. After `claude --resume`, caffeine picks its booked wake back up.
 

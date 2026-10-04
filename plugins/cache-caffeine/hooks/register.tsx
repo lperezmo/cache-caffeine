@@ -28,7 +28,7 @@ import {
   writeRate,
 } from './brew'
 import type { Limit, Usage, Warmth } from './brew'
-import { blocking, cronAt, DEFAULT_WAKE, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter, wholeMinute } from './wake'
+import { blocking, cronAt, DEFAULT_WAKE, fromCron, isNear, MARK, parseWhen, wakeAfter, wholeMinute } from './wake'
 import type { Block } from './wake'
 
 // The session's switch, kept by the host so a reload of the mod finds it.
@@ -92,8 +92,6 @@ type Caffeine = Brew & {
   dismissed: number
   // caffeine was off when the wake was booked, and comes off with it
   isWakeLit: boolean
-  // the child keeping the machine up while a wake waits; leaving its loop ends it
-  awake: AsyncIterator<unknown> | null
 }
 
 const MINUTE = 60_000
@@ -308,62 +306,6 @@ function costLines(c: Caffeine): string[] {
 
 // The wake: a one-shot CronCreate that submits the wake prompt at a set time.
 
-function stopAwake(c: Caffeine): void {
-  const child = c.awake
-  c.awake = null
-  void child?.return?.(undefined)
-}
-
-// Keeps the computer awake while a wake waits: one fixed command per system,
-// which holds sleep off for 6 hours and exits. While the wake is still ahead
-// another one starts; the wake firing or being cancelled ends it at once.
-function spawnAwake($: EngineInterface): AsyncIterator<unknown> {
-  const os = osOf($.plugin.root)
-  if (os === 'windows') {
-    return $.process.spawn({
-      argv: [
-        'powershell',
-        '-NoProfile',
-        '-Command',
-        "Add-Type -Name P -Namespace W -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint f);'; [void][W.P]::SetThreadExecutionState([uint32]'0x80000001'); Start-Sleep -Seconds 21600",
-      ],
-    })[Symbol.asyncIterator]()
-  }
-  if (os === 'mac') {
-    return $.process.spawn({ argv: ['caffeinate', '-i', '-t', '21600'] })[Symbol.asyncIterator]()
-  }
-  return $.process
-    .spawn({ argv: ['systemd-inhibit', '--what=sleep:idle', '--who=cache-caffeine', '--why=waking Claude at a set time', 'sleep', '21600'] })
-    [Symbol.asyncIterator]()
-}
-
-async function keepAwake($: EngineInterface, c: Caffeine): Promise<void> {
-  stopAwake(c)
-  if (!c.armed || !(await setting($, 'awake', true))) {
-    return
-  }
-  try {
-    const child = spawnAwake($)
-    c.awake = child
-    void (async () => {
-      try {
-        while (!(await child.next()).done) {
-          // nothing to read; the child's life is the point
-        }
-      } catch {
-        // no keep-awake command here; sleep is the machine's own business then
-        return
-      }
-      // six hours up and the wake still ahead: hold sleep off again
-      if (c.awake === child && c.armed && c.armed.at > (await $.clock.now())) {
-        await keepAwake($, c)
-      }
-    })()
-  } catch {
-    // same
-  }
-}
-
 async function arm($: EngineInterface, c: Caffeine, at: number, label: string): Promise<void> {
   await disarm($, c)
   const prompt = `${MARK} ${await setting($, 'wakePrompt', DEFAULT_WAKE)}`
@@ -378,7 +320,6 @@ async function arm($: EngineInterface, c: Caffeine, at: number, label: string): 
     return
   }
   c.armed = { id, at, label }
-  await keepAwake($, c)
   // the cache stays warm until Claude picks the work back up
   if (!c.isOn) {
     await switchOn($, c, true, at)
@@ -392,7 +333,6 @@ async function arm($: EngineInterface, c: Caffeine, at: number, label: string): 
 async function disarm($: EngineInterface, c: Caffeine): Promise<boolean> {
   const armed = c.armed
   c.armed = null
-  stopAwake(c)
   if (c.isWakeLit) {
     await switchOn($, c, false)
   }
@@ -415,7 +355,6 @@ async function adopt($: EngineInterface, c: Caffeine): Promise<void> {
     const job = jobs.map(j => ({ ...j, at: fromCron(j.cron, now) })).find(j => j.at > now)
     if (job && !c.armed) {
       c.armed = { id: job.id, at: job.at, label: '' }
-      await keepAwake($, c)
       $.ui.invalidate('ui.render')
     }
   } catch {
@@ -462,8 +401,6 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
       return { text: `On waking Claude will be told: ${value}${c.armed ? ' (from the next wake you book)' : ''}` }
     case 'auto':
       return flip('wakeAuto', 'Booking a wake whenever the limit hits:', false)
-    case 'awake':
-      return flip('awake', 'Keeping the computer awake until a wake:', true)
     case 'push':
       return flip('push', 'A phone notification on waking:', true)
     default: {
@@ -522,7 +459,7 @@ const help = [
   '/caffeine wake         wake Claude just after the usage limit resets',
   '/caffeine wake 14:30   at a time (2:30pm, +90m, +2h work too); off cancels',
   '/caffeine wake prompt …  what Claude is told on waking',
-  '/caffeine wake auto | awake | push   book by itself at the limit; keep the computer awake; phone notification (on/off)',
+  '/caffeine wake auto | push   book by itself at the limit; phone notification when it fires (on/off)',
   '/caffeine status       what it is doing',
 ].join('\n')
 
@@ -564,7 +501,6 @@ export const register: Register = on => {
     isHit: false,
     dismissed: 0,
     isWakeLit: false,
-    awake: null,
   }
 
   on('session.start', async ($, e, next) => {
@@ -710,7 +646,6 @@ export const register: Register = on => {
       // our wake fired
       c.armed = null
       c.isHit = false
-      stopAwake(c)
       $.ui.invalidate('ui.render')
       if (await setting($, 'push', true)) {
         void $.tool
@@ -727,11 +662,6 @@ export const register: Register = on => {
     const done = await next(e)
     c.isAfterCompact = true
     return done
-  })
-
-  on('session.end', ($, e, next) => {
-    stopAwake(c)
-    return next(e)
   })
 
   on('command.run', { command: 'caffeine' }, async ($, e) => {

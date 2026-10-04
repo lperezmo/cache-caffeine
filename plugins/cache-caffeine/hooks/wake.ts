@@ -1,5 +1,5 @@
 // Pure parts of the wake (what was wakey): which usage window is in the way,
-// when to wake, the cron line for it, and keeping the machine up until then.
+// when to wake, and the cron line for it.
 
 import { parseClock } from './brew'
 import type { Limit } from './brew'
@@ -82,13 +82,4 @@ export function parseWhen(word: string, now: number): number | null {
     return ms > 0 ? now + ms : null
   }
   return parseClock(word, now)
-}
-
-export type Os = 'windows' | 'mac' | 'linux'
-
-// Where the plugin lives says which machine this is.
-export function osOf(root: string): Os {
-  if (/^[A-Za-z]:[\\/]/.test(root)) return 'windows'
-  if (root.startsWith('/Users/')) return 'mac'
-  return 'linux'
 }

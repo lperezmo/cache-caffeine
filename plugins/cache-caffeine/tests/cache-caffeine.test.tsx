@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { blocking, cronAt, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter } from '../hooks/wake'
+import { blocking, cronAt, fromCron, isNear, MARK, parseWhen, wakeAfter } from '../hooks/wake'
 import { pokeWasCold, readTiming, warmth } from '../hooks/brew'
 import { clock, defaultEvery, dollars, equivalents, readRate, sized, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
 
@@ -82,10 +82,6 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
       return { result: { message: String(e.message) } }
     }
     return { deny: 'unexpected' }
-  })
-  on('process.spawn', async function* () {
-    // the keep-awake child: nothing to say, then done
-    return { code: 0, signal: null } as never
   })
   on('ui.toast', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
@@ -257,7 +253,7 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect((await run($, 'nonsense')).text).toContain('Not a caffeine command')
 })
 
-test('the wake: windows, times, cron lines and which system it is', () => {
+test('the wake: windows, times and cron lines', () => {
   const five = { kind: 'five_hour', percentUsed: 100, resetsAt: new Date(at(14, 10)).toISOString() }
   const week = { kind: 'seven_day', percentUsed: 40, resetsAt: new Date(at(9, 0, 8)).toISOString() }
   expect(blocking([five, week])?.label).toBe('5h')
@@ -271,9 +267,6 @@ test('the wake: windows, times, cron lines and which system it is', () => {
   expect(parseWhen('+1h30m', at(9, 0))).toBe(at(10, 30))
   expect(parseWhen('2:30pm', at(9, 0))).toBe(at(14, 30))
   expect(parseWhen('soon', at(9, 0))).toBeNull()
-  expect(osOf('C:\\Users\\x\\.claude')).toBe('windows')
-  expect(osOf('/Users/x/.claude')).toBe('mac')
-  expect(osOf('/home/x/.claude')).toBe('linux')
 })
 
 test('cost: per-model cache read rates and the poke against a rewrite', () => {

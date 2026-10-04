@@ -174,7 +174,7 @@ export function equivalents(u: Usage, model: string, ttl: number): number {
 export const pokeGuess = (context: number): Usage => ({ input_tokens: 40, output_tokens: 10, cache_read_input_tokens: context, cache_creation_input_tokens: 60 })
 
 // 7.3k, 284k, 1.2M.
-export function tokens(n: number): string {
+export function sized(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
   if (n >= 1e4) return `${Math.round(n / 1e3)}k`
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`

@@ -92,19 +92,3 @@ export function osOf(root: string): Os {
   if (root.startsWith('/Users/')) return 'mac'
   return 'linux'
 }
-
-// Keeps the machine from sleeping for `seconds`, then lets go; killing it lets
-// go at once. The display may still sleep.
-export function awakeArgv(os: Os, seconds: number): string[] {
-  const s = String(Math.max(1, Math.round(seconds)))
-  if (os === 'windows') {
-    const script =
-      "Add-Type -Name P -Namespace W -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint f);';" +
-      ` [void][W.P]::SetThreadExecutionState([uint32]'0x80000001'); Start-Sleep -Seconds ${s}`
-    return ['powershell', '-NoProfile', '-Command', script]
-  }
-  if (os === 'mac') {
-    return ['caffeinate', '-i', '-t', s]
-  }
-  return ['systemd-inhibit', '--what=sleep:idle', '--who=caffeine', '--why=waking Claude at a set time', 'sleep', s]
-}

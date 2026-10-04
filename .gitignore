@@ -1,6 +1,6 @@
 # Claude Code writes the running build's type declarations here; they stay out of the repo.
 .claude-plugin/types/
-plugins/caffeine/.claude-plugin/types/
-plugins/caffeine/tsconfig.json
+plugins/cache-caffeine/.claude-plugin/types/
+plugins/cache-caffeine/tsconfig.json
 .claude/settings.local.json
 node_modules/

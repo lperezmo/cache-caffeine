@@ -1,18 +1,18 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
-  "name": "caffeine",
+  "name": "cache-caffeine",
   "owner": {
     "name": "Luis Perez Morales",
     "url": "https://github.com/lperezmo"
   },
   "metadata": {
-    "description": "caffeine: a Claude Code mod that keeps the prompt cache warm while you step away."
+    "description": "cache-caffeine: a Claude Code mod that keeps the prompt cache warm while you step away, and wakes Claude when the usage limit resets."
   },
   "plugins": [
     {
-      "name": "caffeine",
-      "source": "./plugins/caffeine",
-      "description": "A short poke before the prompt cache expires, so coming back reads the cache instead of writing it again. On and off from a row above the prompt.",
+      "name": "cache-caffeine",
+      "source": "./plugins/cache-caffeine",
+      "description": "Keeps the prompt cache warm while you step away with a short poke before it expires, and wakes Claude when the usage limit resets. A coffee cup above the prompt shows how warm the cache is.",
       "category": "productivity"
     }
   ]

@@ -17,8 +17,8 @@ import {
   pokeWasCold,
   readTiming,
   readRate,
+  sized,
   span,
-  tokens,
   TTL_1H,
   TTL_5M,
   ttlByPlan,
@@ -28,11 +28,11 @@ import {
   writeRate,
 } from './brew'
 import type { Limit, Usage, Warmth } from './brew'
-import { awakeArgv, blocking, cronAt, DEFAULT_WAKE, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter, wholeMinute } from './wake'
+import { blocking, cronAt, DEFAULT_WAKE, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter, wholeMinute } from './wake'
 import type { Block } from './wake'
 
 // The session's switch, kept by the host so a reload of the mod finds it.
-const brew = atom({ plugin: 'caffeine', key: 'brew' } as const, {
+const brew = atom({ plugin: 'cache-caffeine', key: 'brew' } as const, {
   isOn: false,
   until: 0,
   lastAt: 0,
@@ -132,10 +132,10 @@ async function setting<T>($: EngineInterface, key: string, fallback: T): Promise
 
 async function load($: EngineInterface, c: Caffeine): Promise<void> {
   c.message = await setting($, 'message', DEFAULT_MESSAGE)
-  c.every = await setting<number | null>($, 'every', null)
+  c.every = (await setting($, 'every', null)) as number | null
   c.isBanded = await setting($, 'band', true)
   c.idle = (await setting($, 'idle', DEFAULT_IDLE)) || DEFAULT_IDLE
-  c.ttl = await setting<number | null>($, 'ttl', null)
+  c.ttl = (await setting($, 'ttl', null)) as number | null
   c.autoAt = await setting($, 'autoAt', 0)
   try {
     c.envTtl = ttlFromEnv(
@@ -297,11 +297,11 @@ function costLines(c: Caffeine): string[] {
     return d ? `, ${d}` : ''
   }
   return [
-    `Context ${tokens(c.context)} tokens on ${model}, ${ttlLabel(ttl)} cache, a poke ${span(everyOf(c))} after the last request.`,
-    `One poke: ${tokens(each)} input-token equivalents${usd(each)}${c.lastPoke ? ' (the last one, measured)' : ` (cache read at ${readRate(model)}x)`}.`,
-    `One cache rewrite: ${tokens(rewrite)} (written again at ${writeRate(ttl)}x)${usd(rewrite)}.`,
+    `Context ${sized(c.context)} tokens on ${model}, ${ttlLabel(ttl)} cache, a poke ${span(everyOf(c))} after the last request.`,
+    `One poke: ${sized(each)} input-token equivalents${usd(each)}${c.lastPoke ? ' (the last one, measured)' : ` (cache read at ${readRate(model)}x)`}.`,
+    `One cache rewrite: ${sized(rewrite)} (written again at ${writeRate(ttl)}x)${usd(rewrite)}.`,
     `A rewrite costs about ${Math.round(ratio)} pokes: caffeine pays off if you are back within ${span(ratio * everyOf(c))}.`,
-    c.pokes ? `This session: ${c.pokes} poke${c.pokes === 1 ? '' : 's'}, ${tokens(c.spent)}${usd(c.spent)}.` : '',
+    c.pokes ? `This session: ${c.pokes} poke${c.pokes === 1 ? '' : 's'}, ${sized(c.spent)}${usd(c.spent)}.` : '',
     'At API list prices; on a Pro or Max plan the same tokens count against your usage limits instead.',
   ].filter(Boolean)
 }
@@ -314,15 +314,36 @@ function stopAwake(c: Caffeine): void {
   void child?.return?.(undefined)
 }
 
-// Holds off sleep until a little after the wake, unless turned off.
-async function keepAwake($: EngineInterface, c: Caffeine, at: number): Promise<void> {
+// Keeps the computer awake while a wake waits: one fixed command per system,
+// which holds sleep off for 6 hours and exits. While the wake is still ahead
+// another one starts; the wake firing or being cancelled ends it at once.
+function spawnAwake($: EngineInterface): AsyncIterator<unknown> {
+  const os = osOf($.plugin.root)
+  if (os === 'windows') {
+    return $.process.spawn({
+      argv: [
+        'powershell',
+        '-NoProfile',
+        '-Command',
+        "Add-Type -Name P -Namespace W -MemberDefinition '[DllImport(\"kernel32.dll\")] public static extern uint SetThreadExecutionState(uint f);'; [void][W.P]::SetThreadExecutionState([uint32]'0x80000001'); Start-Sleep -Seconds 21600",
+      ],
+    })[Symbol.asyncIterator]()
+  }
+  if (os === 'mac') {
+    return $.process.spawn({ argv: ['caffeinate', '-i', '-t', '21600'] })[Symbol.asyncIterator]()
+  }
+  return $.process
+    .spawn({ argv: ['systemd-inhibit', '--what=sleep:idle', '--who=cache-caffeine', '--why=waking Claude at a set time', 'sleep', '21600'] })
+    [Symbol.asyncIterator]()
+}
+
+async function keepAwake($: EngineInterface, c: Caffeine): Promise<void> {
   stopAwake(c)
-  if (!(await setting($, 'awake', true))) {
+  if (!c.armed || !(await setting($, 'awake', true))) {
     return
   }
-  const seconds = (at - (await $.clock.now())) / 1000 + 180
   try {
-    const child = $.process.spawn({ argv: awakeArgv(osOf($.plugin.root), seconds) })[Symbol.asyncIterator]()
+    const child = spawnAwake($)
     c.awake = child
     void (async () => {
       try {
@@ -331,6 +352,11 @@ async function keepAwake($: EngineInterface, c: Caffeine, at: number): Promise<v
         }
       } catch {
         // no keep-awake command here; sleep is the machine's own business then
+        return
+      }
+      // six hours up and the wake still ahead: hold sleep off again
+      if (c.awake === child && c.armed && c.armed.at > (await $.clock.now())) {
+        await keepAwake($, c)
       }
     })()
   } catch {
@@ -352,7 +378,7 @@ async function arm($: EngineInterface, c: Caffeine, at: number, label: string): 
     return
   }
   c.armed = { id, at, label }
-  await keepAwake($, c, at)
+  await keepAwake($, c)
   // the cache stays warm until Claude picks the work back up
   if (!c.isOn) {
     await switchOn($, c, true, at)
@@ -389,7 +415,7 @@ async function adopt($: EngineInterface, c: Caffeine): Promise<void> {
     const job = jobs.map(j => ({ ...j, at: fromCron(j.cron, now) })).find(j => j.at > now)
     if (job && !c.armed) {
       c.armed = { id: job.id, at: job.at, label: '' }
-      await keepAwake($, c, job.at)
+      await keepAwake($, c)
       $.ui.invalidate('ui.render')
     }
   } catch {
@@ -584,7 +610,7 @@ export const register: Register = on => {
     c.context = e.context?.tokens ?? c.context
     if (c.autoAt && !c.isOn && !c.isAutoDeclined && c.context >= c.autoAt) {
       await switchOn($, c, true)
-      tell($, `on: the context passed ${tokens(c.autoAt)} tokens. /caffeine off turns it off for this session.`)
+      tell($, `on: the context passed ${sized(c.autoAt)} tokens. /caffeine off turns it off for this session.`)
     }
     const block = blocking(c.limits)
     if (block && block.percent >= 100 && !c.armed && (await setting($, 'wakeAuto', false))) {
@@ -667,7 +693,7 @@ export const register: Register = on => {
           await switchOn($, c, false)
           tell(
             $,
-            `turned off: its poke found the cache cold (it wrote ${tokens(e.usage.cache_creation_input_tokens)} tokens again), so the pokes were not keeping it warm. /caffeine status says why it may be; turn it on again to retry.`,
+            `turned off: its poke found the cache cold (it wrote ${sized(e.usage.cache_creation_input_tokens)} tokens again), so the pokes were not keeping it warm. /caffeine status says why it may be; turn it on again to retry.`,
           )
         } else if (e.usage) {
           c.lastWarm = true
@@ -754,12 +780,12 @@ export const register: Register = on => {
       }
       case 'auto': {
         const v = value.toLowerCase()
-        if (!v) return { text: c.autoAt ? `Caffeine turns on by itself past ${tokens(c.autoAt)} tokens of context.` : 'Auto is off. /caffeine auto 100k turns it on.' }
+        if (!v) return { text: c.autoAt ? `Caffeine turns on by itself past ${sized(c.autoAt)} tokens of context.` : 'Auto is off. /caffeine auto 100k turns it on.' }
         const n = v === 'off' ? 0 : v === 'on' ? 100_000 : /^(\d+(?:\.\d+)?)(k|m)?$/.test(v) ? Math.round(Number.parseFloat(v) * (v.endsWith('m') ? 1e6 : v.endsWith('k') ? 1e3 : 1)) : null
         if (n === null || (n > 0 && n < 1000)) return { text: `Not a token count I know: ${value}. Try 100k, or off.` }
         c.autoAt = n
         await $.store.set('autoAt', n)
-        return { text: n ? `Caffeine turns on by itself once the context passes ${tokens(n)} tokens (now ${tokens(c.context)}).` : 'Auto off.' }
+        return { text: n ? `Caffeine turns on by itself once the context passes ${sized(n)} tokens (now ${sized(c.context)}).` : 'Auto off.' }
       }
       case 'cost':
         return { text: costLines(c).join('\n') }
@@ -814,7 +840,7 @@ export const register: Register = on => {
         const lines = [
           describe(c, now).text,
           `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}) · poke ${span(everyOf(c))} after the last request${c.every === null ? ' (auto)' : ''}`,
-          `${c.isForever ? 'No idle stop this time: on until you turn it off' : `Off by itself after ${span(c.idle)} idle`} · auto ${c.autoAt ? `past ${tokens(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
+          `${c.isForever ? 'No idle stop this time: on until you turn it off' : `Off by itself after ${span(c.idle)} idle`} · auto ${c.autoAt ? `past ${sized(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
           c.lastWarm === null ? '' : `The last poke found the cache ${c.lastWarm ? 'warm' : 'cold'}.`,
           c.coldAt ? `The cache last went cold before ${clock(c.coldAt, now)}, after ${span(c.coldGap)} idle.` : '',
           `The poke says: ${c.message}`,

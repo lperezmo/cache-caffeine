@@ -2,9 +2,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { awakeArgv, blocking, cronAt, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter } from '../hooks/wake'
+import { blocking, cronAt, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter } from '../hooks/wake'
 import { pokeWasCold, readTiming, warmth } from '../hooks/brew'
-import { clock, defaultEvery, dollars, equivalents, readRate, tokens, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
+import { clock, defaultEvery, dollars, equivalents, readRate, sized, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
 
 const PROPS = {
   hasSurvey: false,
@@ -73,7 +73,7 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('tool.call', ($, e) => {
     if (e.tool === 'CronCreate') {
       crons.push({ cron: String(e.cron), prompt: String(e.prompt) })
-      return { result: { id: `job${crons.length}`, humanSchedule: 'once', recurring: false } }
+      return { result: { id: ['job1', 'job2', 'job3'][crons.length - 1] ?? 'job', humanSchedule: 'once', recurring: false } }
     }
     if (e.tool === 'CronDelete') return { result: { id: String(e.id) } }
     if (e.tool === 'CronList') return { result: { jobs: [] } }
@@ -167,7 +167,7 @@ test('the band toggles it, edits the message, and draws what is beneath', async 
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
 
   for (const surface of ['terminal', 'desktop'] as const) {
-    const mount = () => $.ui.mount({ plugin: 'caffeine', surface, component: 'AbovePrompt', props: PROPS })
+    const mount = () => $.ui.mount({ plugin: 'cache-caffeine', surface, component: 'AbovePrompt', props: PROPS })
     let ui = await mount()
     expect(JSON.stringify(await ui.drawn())).toContain('caffeine off')
     expect(await ui.find({ key: 'beneath' })).toBeDefined()
@@ -192,7 +192,7 @@ test('the band toggles it, edits the message, and draws what is beneath', async 
 
   // bandless: the row steps aside for the other mods' rows
   expect((await run($, 'band off')).text).toContain('status line')
-  const ui = await $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  const ui = await $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   expect(JSON.stringify(await ui.drawn())).not.toContain('caffeine')
   expect(await ui.find({ key: 'beneath' })).toBeDefined()
 })
@@ -257,7 +257,7 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect((await run($, 'nonsense')).text).toContain('Not a caffeine command')
 })
 
-test('the wake: windows, times, cron lines and keep-awake commands', () => {
+test('the wake: windows, times, cron lines and which system it is', () => {
   const five = { kind: 'five_hour', percentUsed: 100, resetsAt: new Date(at(14, 10)).toISOString() }
   const week = { kind: 'seven_day', percentUsed: 40, resetsAt: new Date(at(9, 0, 8)).toISOString() }
   expect(blocking([five, week])?.label).toBe('5h')
@@ -274,9 +274,6 @@ test('the wake: windows, times, cron lines and keep-awake commands', () => {
   expect(osOf('C:\\Users\\x\\.claude')).toBe('windows')
   expect(osOf('/Users/x/.claude')).toBe('mac')
   expect(osOf('/home/x/.claude')).toBe('linux')
-  expect(awakeArgv('windows', 60)[0]).toBe('powershell')
-  expect(awakeArgv('mac', 60)).toEqual(['caffeinate', '-i', '-t', '60'])
-  expect(awakeArgv('linux', 60).slice(0, 2)).toEqual(['systemd-inhibit', '--what=sleep:idle'])
 })
 
 test('cost: per-model cache read rates and the poke against a rewrite', () => {
@@ -285,8 +282,8 @@ test('cost: per-model cache read rates and the poke against a rewrite', () => {
   expect(readRate('claude-sonnet-5-5')).toBe(0.1)
   const poke = { input_tokens: 40, output_tokens: 10, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 60 }
   expect(equivalents(poke, 'claude-opus-5-5', 3_600_000)).toBe(40 + 50 + 5000 + 120)
-  expect(tokens(284_000)).toBe('284k')
-  expect(tokens(7300)).toBe('7.3k')
+  expect(sized(284_000)).toBe('284k')
+  expect(sized(7300)).toBe('7.3k')
   expect(dollars(1_000_000, 'claude-opus-5-5')).toBe('about $4.00')
   expect(dollars(100, 'claude-opus-5-5')).toBe('under $0.01')
   expect(dollars(100, 'some-other-model')).toBe('')
@@ -307,7 +304,7 @@ test('near the limit the band offers a wake; a press books it and keeps the cach
     rateLimits: [{ kind: 'five_hour', percentUsed: 96, resetsAt: new Date(resetsAt).toISOString() }],
   } as never)
 
-  const mount = () => $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  const mount = () => $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   let ui = await mount()
   expect(JSON.stringify(await ui.drawn())).toContain('5h limit 96%')
   expect(await ui.find({ key: 'beneath' })).toBeDefined()
@@ -370,7 +367,7 @@ test('auto turns it on past the context size, once; away 1h; cost reads the sess
 
   // on with no end the row says so; a set length says when it ends
   await run($, 'on')
-  const ui = await $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  const ui = await $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   expect(JSON.stringify(await ui.drawn())).toContain('until you turn it off (or 8h idle)')
   expect(await ui.find({ key: 'caffeine-away' })).toBeUndefined()
   await ui.unmount()
@@ -435,7 +432,7 @@ test('the band draws the cup: --F before a reply, then the temperature, cooling'
   mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
   world(on, [])
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
-  const mount = () => $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  const mount = () => $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   let ui = await mount()
   let drawn = JSON.stringify(await ui.drawn())
   expect(drawn).toContain('c[_]')

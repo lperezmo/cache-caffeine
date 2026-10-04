@@ -1,6 +1,6 @@
-<p align="center"><img src=".claude-plugin/icon.png" width="128" alt="caffeine"></p>
+<p align="center"><img src=".claude-plugin/icon.png" width="128" alt="cache-caffeine"></p>
 
-# caffeine
+# cache-caffeine
 
 A Claude Code mod that keeps the prompt cache warm while you step away, and wakes Claude up when the usage limit resets.
 
@@ -22,8 +22,8 @@ Near the usage limit a second row offers the wake:
 ## Install
 
 ```
-/plugin marketplace add lperezmo/caffeine
-/plugin install caffeine@caffeine
+/plugin marketplace add lperezmo/cache-caffeine
+/plugin install cache-caffeine@cache-caffeine
 ```
 
 Needs Claude Code 2.1.287 or newer (mods on by default).
@@ -54,15 +54,14 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 
 ## What it does and does not do
 
-- It sends a prompt on your behalf. Each poke is a real turn: it uses your plan's usage and adds a short exchange to the conversation.
-- It is off until you turn it on, and only for the session you turn it on in.
-- It waits while Claude is working and pauses when the 5-hour window is over 90% or the weekly one over 95%.
-- It skips the poke once the cache has already expired, since that would only write it again.
-- If a poke finds the cache cold anyway (it writes more than a tenth of what it reads), the pokes are not doing their job, so caffeine turns itself off and says so.
-- It turns itself off after 8 hours without a turn of your own, unless you confirm `/caffeine forever` (change the length with `/caffeine idle`).
-- It works out the cache TTL by itself: from what each request cost (a 1-hour write costs 2x input, a 5-minute one 1.25x), else from `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M` or `ENABLE_PROMPT_CACHING_1H`, else from request timing (the cache still read after more than 5 minutes idle means 1 hour), else Claude Code's default for your plan. No network and no files; the only process it starts is the keep-awake one below.
-- A wake is a one-shot `CronCreate` job in the session. Until it fires, caffeine keeps the cache warm (if the limit allows pokes) and keeps the computer from sleeping: `powershell` with `SetThreadExecutionState` on Windows, `caffeinate` on macOS, `systemd-inhibit` on Linux. Turn that off with `/caffeine wake awake off`.
-- On waking it sends a phone notification through Claude Code's `PushNotification`; `/caffeine wake push off` stops it.
+- **It sends prompts on your behalf.** Each poke is a real turn: it uses your plan's usage and adds a short exchange to the conversation. A poke is exactly the message you set (default "poke, just say okay"), and a wake is exactly the wake prompt you set (default "The usage limit has reset. Pick up where you left off."), with `[caffeine]` in front. Nothing read from the conversation, a file or anywhere else goes into either.
+- It is off until you turn it on, and only for the session you turn it on in. It waits while Claude is working and pauses when the 5-hour window is over 90% or the weekly one over 95%.
+- It skips the poke once the cache has already expired, since that would only write it again. If a poke finds the cache cold anyway (it writes more than a tenth of what it reads), caffeine turns itself off and says so.
+- It turns itself off after 8 hours without a turn of your own, unless you confirm `/caffeine forever` for that run (change the length with `/caffeine idle`).
+- **What it reads:** the session's own usage figures from Claude Code (token counts per request, the running cost estimate, the 5-hour and weekly limit windows) and three environment variables, `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M` and `ENABLE_PROMPT_CACHING_1H`. From those it works out the cache TTL: what a request cost (a 1-hour write costs 2x input, a 5-minute one 1.25x), else the variables, else request timing (the cache still read after more than 5 minutes idle means 1 hour), else Claude Code's default for your plan. It reads no files and makes no network requests of its own.
+- **Tools it calls itself:** `CronCreate`, `CronList` and `CronDelete`, only for the wake (book it, find it again after `--resume`, cancel it); `PushNotification`, once, when a wake fires (`/caffeine wake push off` stops it); `AskUserQuestion`, to confirm `/caffeine forever`.
+- **Programs it starts:** only while a wake is booked, one fixed command that keeps the computer from sleeping for up to 6 hours and starts again if the wake is further off: on Windows `powershell` calling `SetThreadExecutionState`, on macOS `caffeinate -i -t 21600`, on Linux `systemd-inhibit ... sleep 21600`. It ends when the wake fires or is cancelled. `/caffeine wake awake off` turns it off.
+- **Hooks that see other events:** `prompt.submit` only notices its own wake prompt firing (and clears the "limit hit" flag on yours); it changes nothing. `classic.StopFailure` only notices a reply that failed on the usage limit, to offer the wake. `turn.step` reads each request's usage and leaves the request as it is. `session.compact` only notes that a compaction happened.
 - The session has to stay open. After `claude --resume`, caffeine picks its booked wake back up.
 
 ## License

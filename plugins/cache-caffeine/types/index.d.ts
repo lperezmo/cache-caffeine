@@ -7,6 +7,6 @@ export type Brew = { isOn: boolean; until: number; lastAt: number; activeAt: num
 
 declare module 'claude-code' {
   interface PluginState {
-    caffeine: { brew: Brew }
+    'cache-caffeine': { brew: Brew }
   }
 }

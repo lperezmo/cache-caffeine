@@ -6,7 +6,12 @@
     "name": "Luis Perez Morales",
     "url": "https://github.com/lperezmo"
   },
+  "homepage": "https://github.com/lperezmo/cache-caffeine",
   "repository": "https://github.com/lperezmo/cache-caffeine",
+  "documentationUrl": "https://github.com/lperezmo/cache-caffeine#readme",
+  "supportUrl": "https://github.com/lperezmo/cache-caffeine/issues",
+  "privacyPolicyUrl": "https://github.com/lperezmo/cache-caffeine/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/lperezmo/cache-caffeine/blob/main/LICENSE",
   "license": "MIT",
   "keywords": [
     "prompt cache",

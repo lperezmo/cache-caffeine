@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "caffeine",
+  "owner": {
+    "name": "Luis Perez Morales",
+    "url": "https://github.com/lperezmo"
+  },
+  "metadata": {
+    "description": "caffeine: a Claude Code mod that keeps the prompt cache warm while you step away."
+  },
+  "plugins": [
+    {
+      "name": "caffeine",
+      "source": "./plugins/caffeine",
+      "description": "A short poke before the prompt cache expires, so coming back reads the cache instead of writing it again. On and off from a row above the prompt.",
+      "category": "productivity"
+    }
+  ]
+}

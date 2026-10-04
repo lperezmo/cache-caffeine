@@ -1,0 +1,13 @@
+{
+  "name": "caffeine",
+  "version": "0.1.0",
+  "description": "Keeps the prompt cache warm while you step away: a short poke before the cache expires, so the next turn reads the cache instead of writing it again. A row above the prompt turns it on and off and edits the message.",
+  "author": {
+    "name": "Luis Perez Morales",
+    "url": "https://github.com/lperezmo"
+  },
+  "repository": "https://github.com/lperezmo/caffeine",
+  "license": "MIT",
+  "keywords": ["prompt cache", "cache", "keep warm", "idle", "mod"],
+  "types": "./types/index.d.ts"
+}

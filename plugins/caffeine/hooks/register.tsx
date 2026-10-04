@@ -905,7 +905,7 @@ export const register: Register = on => {
           {` ${warm?.steam ?? '   '}`}
         </Text>
         <Box key="caffeine-row" flexDirection="row" columnGap={2}>
-          <Box key="caffeine-cup" flexDirection="row" columnGap={1}>
+          <Box key="caffeine-cup" flexDirection="row" columnGap={1} flexShrink={0}>
             <Text key="cup" color={warm?.color} dimColor={!warm}>
               c[_]
             </Text>
@@ -913,9 +913,12 @@ export const register: Register = on => {
               {warm ? `${warm.degrees}°F` : '--°F'}
             </Text>
           </Box>
-          <Text key="text" color={line.color} dimColor={line.isDim} wrap="truncate-end">
-            {line.text}
-          </Text>
+          <Box key="caffeine-line" flexShrink={1} minWidth={0}>
+            <Text key="text" color={line.color} dimColor={line.isDim} wrap="truncate-end">
+              {line.text}
+            </Text>
+          </Box>
+          <Box key="caffeine-buttons" flexDirection="row" columnGap={2} flexShrink={0}>
           <Button
             key="caffeine-toggle"
             plain
@@ -930,6 +933,7 @@ export const register: Register = on => {
           <Button key="caffeine-edit" plain dimColor hotkey="e" onPress={() => void editInBand($, c)}>
             message
           </Button>
+          </Box>
         </Box>
       </Box>
     )

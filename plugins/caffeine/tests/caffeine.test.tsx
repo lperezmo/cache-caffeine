@@ -34,8 +34,8 @@ test('durations, times and the cadence', () => {
   expect(span(12 * MIN)).toBe('12m')
   expect(span(150_000)).toBe('2m 30s')
   expect(span(45_000)).toBe('45s')
-  expect(defaultEvery(TTL_1H)).toBe(15 * MIN)
-  expect(defaultEvery(TTL_5M)).toBe(150_000)
+  expect(defaultEvery(TTL_1H)).toBe(48 * MIN)
+  expect(defaultEvery(TTL_5M)).toBe(4 * MIN)
   expect(ttlFromEnv(undefined, undefined, '1')).toBe(TTL_1H)
   expect(ttlFromEnv(undefined, '1', '1')).toBe(TTL_5M)
   expect(ttlFromEnv('1h', '1', undefined)).toBe(TTL_1H)
@@ -120,7 +120,7 @@ async function turn($: Engine, id: string, text: string, usage?: object) {
 const run = ($: Engine, args: string) =>
   $.command.run({ command: 'caffeine', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
 
-test('on, it pokes 15 minutes after the last request on a 1h cache, and not on a cold one', async ($, on) => {
+test('on, it pokes 48 minutes after the last request on a 1h cache, and not on a cold one', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
   mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
@@ -128,18 +128,18 @@ test('on, it pokes 15 minutes after the last request on a 1h cache, and not on a
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
 
-  expect((await run($, 'on')).text).toContain('until you turn it off, poking 15m after the last request (1h cache)')
+  expect((await run($, 'on')).text).toContain('until you turn it off, poking 48m after the last request (1h cache)')
   await turn($, 't1', 'fix the tests')
-  await time.advance(14 * MIN)
+  await time.advance(47 * MIN)
   expect(submitted).toEqual([])
   await time.advance(1 * MIN + 5_000)
   expect(submitted).toEqual(['poke, just say okay'])
 
-  // the poke's own turn: warm, counted, and the next one 15 minutes after it
+  // the poke's own turn: warm, counted, and the next one 48 minutes after it
   await turn($, 't2', 'poke, just say okay', { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 40, model: 'claude-opus-5-5' })
   expect((await run($, 'status')).text).toContain('1 poke')
   expect((await run($, 'status')).text).toContain('found the cache warm')
-  await time.advance(15 * MIN + 5_000)
+  await time.advance(48 * MIN + 5_000)
   expect(submitted.length).toBe(2)
   await turn($, 't3', 'poke, just say okay')
 
@@ -202,7 +202,7 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
 
   expect((await run($, 'warm 1h')).text).toBe('Caffeine on, keeping the cache warm until 10:00.')
   await turn($, 't1', 'hello')
-  await time.advance(150_000 + 5_000)
+  await time.advance(4 * MIN + 5_000)
   expect(submitted.length).toBe(1)
   await turn($, 't2', 'poke, just say okay')
   await time.advance(61 * MIN)
@@ -212,7 +212,7 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect((await run($, 'idle 20m')).text).toContain('after 20m')
   await run($, 'on')
   for (let i = 0; i < 10; i++) {
-    await time.advance(150_000 + 5_000)
+    await time.advance(4 * MIN + 5_000)
     if (submitted.length > i + 1) await turn($, `p${i}`, 'poke, just say okay')
   }
   expect((await run($, 'status')).text).toContain('caffeine off')

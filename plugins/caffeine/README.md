@@ -7,7 +7,7 @@ A Claude Code mod that keeps the prompt cache warm while you step away, and wake
 Claude Code caches the conversation for 1 hour on a Claude subscription and 5 minutes on an API key. Come back after it expires and the next turn writes the whole context to the cache again. With caffeine on, a short poke goes out before the cache expires, so your next turn reads the cache instead.
 
 ```
-caffeine on · poke at 14:32 (in 12m) · until you turn it off (or 8h idle)   t: turn off   e: message
+caffeine on · poke at 14:32 (in 40m) · until you turn it off (or 8h idle)   t: turn off   e: message
 ```
 
 Near the usage limit a second row offers the wake:
@@ -36,7 +36,7 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 | `/caffeine until 18:00` | on, then off at 18:00 |
 | `/caffeine poke` | poke now |
 | `/caffeine message <text>` | what the poke says (`reset` for the default, "poke, just say okay") |
-| `/caffeine every 10m` | how long after the last request to poke (`auto`: 15m on a 1h cache, 2m 30s on 5m) |
+| `/caffeine every 10m` | how long after the last request to poke (`auto`: at 80% of the cache's life, 48m on a 1h cache, 4m on 5m) |
 | `/caffeine ttl 1h` | pin the cache TTL (`auto` to go back to detecting it) |
 | `/caffeine idle 8h` | turn off after this long without a turn of your own |
 | `/caffeine forever` | no end this time: asks you to confirm, then keeps the cache warm until you turn it off; the next turn-on has the idle stop again (`idle off` does the same) |

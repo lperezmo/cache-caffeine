@@ -13,10 +13,13 @@ const hour = 60 * minute
 export const TTL_5M = 5 * minute
 export const TTL_1H = hour
 
-// How long after the last request a poke goes out, unless set: a quarter of a
-// 1-hour cache, half of a 5-minute one.
+// How long after the last request a poke goes out, unless set: at 80% of the
+// TTL (48m of 1h, 4m of 5m). Each poke starts the TTL again, so one poke per
+// lifetime, late in it, is all the cache needs; the rest is margin.
+export const POKE_AT = 0.8
+
 export function defaultEvery(ttl: number): number {
-  return ttl >= TTL_1H ? 15 * minute : 2.5 * minute
+  return Math.round(ttl * POKE_AT)
 }
 
 // Turned off by itself after this long without a turn that was not a poke.

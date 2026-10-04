@@ -85,7 +85,8 @@ type Caffeine = Brew & {
 }
 
 const MINUTE = 60_000
-const AWAY = 60 * MINUTE
+// `/caffeine warm` alone
+const WARM = 60 * MINUTE
 
 // what the requests cost is the truth; the environment and the plan are what Claude Code should pick
 const ttlOf = (c: Caffeine) => c.ttl ?? c.measuredTtl ?? c.envTtl ?? ttlByPlan(c.limits)
@@ -139,12 +140,20 @@ async function keep($: EngineInterface, c: Caffeine): Promise<void> {
   await update($, brew, () => kept).catch(() => undefined)
 }
 
+// How long caffeine keeps the cache warm: to a set time, or until it is turned off.
+function howLong(c: Caffeine, now: number): string {
+  if (c.until) {
+    return `until ${clock(c.until, now)} (${span(c.until - now)} left)`
+  }
+  return c.idle && !c.armed ? `until you turn it off (or ${span(c.idle).replace(' 00m', '')} idle)` : 'until you turn it off'
+}
+
 // One line for the band, the status line and /caffeine status.
 function describe(c: Caffeine, now: number): { text: string; color?: string; isDim?: boolean } {
   if (!c.isOn) {
     return { text: 'caffeine off', isDim: true }
   }
-  const tail = [c.pokes ? `${c.pokes} poke${c.pokes === 1 ? '' : 's'}` : '', c.until ? `until ${clock(c.until, now)}` : '']
+  const tail = [c.pokes ? `${c.pokes} poke${c.pokes === 1 ? '' : 's'}` : '', howLong(c, now)]
     .filter(Boolean)
     .map(t => ` · ${t}`)
     .join('')
@@ -250,12 +259,6 @@ async function editInBand($: EngineInterface, c: Caffeine): Promise<void> {
   if (c.bandId) {
     await $.ui.focus({ requestId: c.bandId, key: 'caffeine-message' }).catch(() => undefined)
   }
-}
-
-async function goAway($: EngineInterface, c: Caffeine): Promise<void> {
-  const at = (await $.clock.now()) + AWAY
-  await switchOn($, c, true, at)
-  tell($, `keeping the cache warm until ${clock(at, at - AWAY)}.`)
 }
 
 // What the pokes cost against one cache rewrite.
@@ -633,23 +636,23 @@ export const register: Register = on => {
         return { text: c.isOn ? `Caffeine on: ${describe(c, now).text.replace(/^caffeine on · /, '')}.` : 'Caffeine off.' }
       case 'on':
         await switchOn($, c, true)
-        return { text: `Caffeine on, poking ${span(everyOf(c))} after the last request (${ttlLabel(ttlOf(c))} cache).` }
+        return { text: `Caffeine on until you turn it off, poking ${span(everyOf(c))} after the last request (${ttlLabel(ttlOf(c))} cache).` }
       case 'off':
         c.isAutoDeclined = true
         await switchOn($, c, false)
         return { text: 'Caffeine off.' }
       case 'for':
       case 'warm': {
-        const ms = value ? parseDuration(value) : AWAY
+        const ms = value ? parseDuration(value) : WARM
         if (ms === null) return { text: `Not a duration I know: ${value}. Try 2h, 90m or 1h30m.` }
         await switchOn($, c, true, now + ms)
-        return { text: `Caffeine on until ${clock(now + ms, now)}.` }
+        return { text: `Caffeine on, keeping the cache warm until ${clock(now + ms, now)}.` }
       }
       case 'until': {
         const at = parseClock(value, now)
         if (at === null) return { text: `Not a time I know: ${value || '(none)'}. Try 18:00 or 6pm.` }
         await switchOn($, c, true, at)
-        return { text: `Caffeine on until ${clock(at, now)}.` }
+        return { text: `Caffeine on, keeping the cache warm until ${clock(at, now)}.` }
       }
       case 'poke':
         if (c.poke !== 'none') return { text: 'A poke is already on its way.' }
@@ -816,9 +819,6 @@ export const register: Register = on => {
           }}
         >
           {c.isOn ? 'turn off' : 'turn on'}
-        </Button>
-        <Button key="caffeine-away" plain dimColor hotkey="l" onPress={() => void goAway($, c)}>
-          keep warm 1h
         </Button>
         <Button key="caffeine-edit" plain dimColor hotkey="e" onPress={() => void editInBand($, c)}>
           message

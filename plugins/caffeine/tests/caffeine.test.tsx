@@ -128,7 +128,7 @@ test('on, it pokes 15 minutes after the last request on a 1h cache, and not on a
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
 
-  expect((await run($, 'on')).text).toContain('poking 15m after the last request (1h cache)')
+  expect((await run($, 'on')).text).toContain('until you turn it off, poking 15m after the last request (1h cache)')
   await turn($, 't1', 'fix the tests')
   await time.advance(14 * MIN)
   expect(submitted).toEqual([])
@@ -200,7 +200,7 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
 
-  expect((await run($, 'for 1h')).text).toBe('Caffeine on until 10:00.')
+  expect((await run($, 'warm 1h')).text).toBe('Caffeine on, keeping the cache warm until 10:00.')
   await turn($, 't1', 'hello')
   await time.advance(150_000 + 5_000)
   expect(submitted.length).toBe(1)
@@ -351,9 +351,13 @@ test('auto turns it on past the context size, once; away 1h; cost reads the sess
   expect(cost).toContain('written again at 2x')
   expect(cost).toContain('A rewrite costs about 39 pokes')
 
+  // on with no end the row says so; a set length says when it ends
+  await run($, 'on')
   const ui = await $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
-  await ui.press({ key: 'caffeine-away' })
-  expect((await run($, 'status')).text).toContain('until 10:00')
-  expect((await run($, 'warm 30m')).text).toBe('Caffeine on until 09:30.')
+  expect(JSON.stringify(await ui.drawn())).toContain('until you turn it off (or 8h idle)')
+  expect(await ui.find({ key: 'caffeine-away' })).toBeUndefined()
   await ui.unmount()
+  expect((await run($, 'warm')).text).toBe('Caffeine on, keeping the cache warm until 10:00.')
+  expect((await run($, 'warm 30m')).text).toBe('Caffeine on, keeping the cache warm until 09:30.')
+  expect((await run($, 'status')).text).toContain('until 09:30 (30m left)')
 })

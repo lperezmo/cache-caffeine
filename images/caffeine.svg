@@ -8,6 +8,6 @@
   </g>
   <path d="M176 128h10a26 26 0 0 1 0 52h-14" fill="none" stroke="#F3E6D3" stroke-width="14" stroke-linecap="round"/>
   <path d="M60 112h124v52a46 46 0 0 1-46 46h-32a46 46 0 0 1-46-46z" fill="#F3E6D3"/>
-  <rect x="60" y="112" width="124" height="16" rx="4" fill="#8B5A3C"/>
+  <rect x="60" y="112" width="124" height="16" fill="#8B5A3C"/>
   <rect x="46" y="208" width="152" height="10" rx="5" fill="#F3E6D3" opacity="0.55"/>
 </svg>

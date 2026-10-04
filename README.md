@@ -39,7 +39,7 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 | `/caffeine every 10m` | how long after the last request to poke (`auto`: 15m on a 1h cache, 2m 30s on 5m) |
 | `/caffeine ttl 1h` | pin the cache TTL (`auto` to go back to detecting it) |
 | `/caffeine idle 8h` | turn off after this long without a turn of your own |
-| `/caffeine forever` | no end at all: asks you to confirm, then keeps the cache warm until you turn it off (`idle off` does the same) |
+| `/caffeine forever` | no end this time: asks you to confirm, then keeps the cache warm until you turn it off; the next turn-on has the idle stop again (`idle off` does the same) |
 | `/caffeine band off` | no row; shows in the status line instead, for when other mods use the band |
 | `/caffeine auto 100k` | turn on by itself once the context passes 100k tokens (`off` for never, the default) |
 | `/caffeine cost` | what a poke costs against one cache rewrite, and how long caffeine pays off for |

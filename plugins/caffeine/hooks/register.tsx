@@ -36,6 +36,7 @@ const brew = atom({ plugin: 'caffeine', key: 'brew' } as const, {
   lastAt: 0,
   activeAt: 0,
   isAutoDeclined: false,
+  isForever: false,
 })
 
 // A wake booked with CronCreate: its job, when it fires, and what it waits out.
@@ -121,7 +122,7 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
   c.message = await setting($, 'message', DEFAULT_MESSAGE)
   c.every = await setting<number | null>($, 'every', null)
   c.isBanded = await setting($, 'band', true)
-  c.idle = await setting($, 'idle', DEFAULT_IDLE)
+  c.idle = (await setting($, 'idle', DEFAULT_IDLE)) || DEFAULT_IDLE
   c.ttl = await setting<number | null>($, 'ttl', null)
   c.autoAt = await setting($, 'autoAt', 0)
   try {
@@ -136,7 +137,7 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
 }
 
 async function keep($: EngineInterface, c: Caffeine): Promise<void> {
-  const kept: Brew = { isOn: c.isOn, until: c.until, lastAt: c.lastAt, activeAt: c.activeAt, isAutoDeclined: c.isAutoDeclined }
+  const kept: Brew = { isOn: c.isOn, until: c.until, lastAt: c.lastAt, activeAt: c.activeAt, isAutoDeclined: c.isAutoDeclined, isForever: c.isForever }
   await update($, brew, () => kept).catch(() => undefined)
 }
 
@@ -145,7 +146,7 @@ function howLong(c: Caffeine, now: number): string {
   if (c.until) {
     return `until ${clock(c.until, now)} (${span(c.until - now)} left)`
   }
-  return c.idle && !c.armed ? `until you turn it off (or ${span(c.idle).replace(' 00m', '')} idle)` : 'until you turn it off'
+  return c.isForever || c.armed ? 'until you turn it off' : `until you turn it off (or ${span(c.idle).replace(' 00m', '')} idle)`
 }
 
 // One line for the band, the status line and /caffeine status.
@@ -196,6 +197,7 @@ async function switchOn($: EngineInterface, c: Caffeine, isOn: boolean, until = 
   c.isOn = isOn
   c.until = isOn ? until : 0
   c.isWakeLit = false
+  c.isForever = false
   if (isOn) {
     c.activeAt = await $.clock.now()
   } else if (c.poke === 'sent') {
@@ -225,7 +227,7 @@ async function tick($: EngineInterface, c: Caffeine): Promise<void> {
     if (!wasWake) tell($, 'wore off.')
     return
   }
-  if (c.idle && !c.armed && now - c.activeAt >= c.idle) {
+  if (!c.isForever && !c.armed && now - c.activeAt >= c.idle) {
     await switchOn($, c, false)
     tell($, `turned off after ${span(c.idle)} without a turn of your own.`)
     return
@@ -440,23 +442,23 @@ async function forever($: EngineInterface, c: Caffeine, isSure: boolean): Promis
     let answer: string
     try {
       answer = await $.ui.ask(
-        `Keep the cache warm with no end? Caffeine will poke ${span(everyOf(c))} after the last request until you turn it off, about ${perDay} pokes a day while you are away, and each one uses your plan's usage.`,
+        `Keep the cache warm with no end, this time? Caffeine will poke ${span(everyOf(c))} after the last request until you turn it off, about ${perDay} pokes a day while you are away, and each one uses your plan's usage. Once you turn it off, the idle stop is back.`,
         { header: 'caffeine', options: [FOREVER, KEEP_STOP] },
       )
     } catch {
       return { text: 'No one to ask here. /caffeine forever yes confirms it.' }
     }
     if (answer !== FOREVER) {
-      return { text: `Kept: caffeine still turns itself off after ${span(c.idle || DEFAULT_IDLE)} without a turn of your own.` }
+      return { text: `Kept: caffeine still turns itself off after ${span(c.idle)} without a turn of your own.` }
     }
   }
-  c.idle = 0
-  await $.store.set('idle', 0)
   if (!c.isOn || c.until) {
     await switchOn($, c, true)
   }
+  c.isForever = true
+  await keep($, c)
   await refresh($, c)
-  return { text: 'Caffeine on with no end: it keeps the cache warm until you turn it off. /caffeine idle 8h brings the idle stop back.' }
+  return { text: `Caffeine on with no end: it keeps the cache warm until you turn it off. The next time you turn it on, the ${span(c.idle)} idle stop is back.` }
 }
 
 const help = [
@@ -470,7 +472,7 @@ const help = [
   '/caffeine cost         what the pokes cost against one cache rewrite',
   '/caffeine every 10m    poke this long after the last request (alone: back to auto)',
   '/caffeine ttl 1h|5m    pin the cache TTL (auto: back to detecting it)',
-  '/caffeine forever      on with no end at all, once you confirm (also: idle off)',
+  '/caffeine forever      on with no end this time, once you confirm (also: idle off); off brings the idle stop back',
   '/caffeine idle 8h      turn off after this long without a turn of your own',
   '/caffeine band on|off  the row above the prompt; off moves it to the status line',
   '/caffeine wake         wake Claude just after the usage limit resets',
@@ -487,6 +489,7 @@ export const register: Register = on => {
     lastAt: 0,
     activeAt: 0,
     isAutoDeclined: false,
+    isForever: false,
     isBusy: false,
     poke: 'none',
     pokeTurnId: '',
@@ -739,10 +742,10 @@ export const register: Register = on => {
           return forever($, c, second === 'yes')
         }
         const ms = parseDuration(value)
-        if (ms === null) return { text: `Not a duration I know: ${value || '(none)'}. Try 8h, or off.` }
+        if (ms === null) return { text: `Not a duration I know: ${value || '(none)'}. Try 8h, or off for no end this time.` }
         c.idle = ms
         await $.store.set('idle', ms)
-        return { text: ms ? `Caffeine turns itself off after ${span(ms)} without a turn of your own.` : 'Caffeine stays on until you turn it off.' }
+        return { text: `Caffeine turns itself off after ${span(ms)} without a turn of your own.` }
       }
       case 'band': {
         const v = value.toLowerCase()
@@ -758,7 +761,7 @@ export const register: Register = on => {
         const lines = [
           describe(c, now).text,
           `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}) · poke ${span(everyOf(c))} after the last request${c.every === null ? ' (auto)' : ''}`,
-          `${c.idle ? `Off by itself after ${span(c.idle)} idle` : 'No idle stop: on until you turn it off'} · auto ${c.autoAt ? `past ${tokens(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
+          `${c.isForever ? 'No idle stop this time: on until you turn it off' : `Off by itself after ${span(c.idle)} idle`} · auto ${c.autoAt ? `past ${tokens(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
           c.lastWarm === null ? '' : `The last poke found the cache ${c.lastWarm ? 'warm' : 'cold'}.`,
           `The poke says: ${c.message}`,
           c.armed ? `Wake: Claude continues at ${clock(c.armed.at, now)} (in ${span(c.armed.at - now)}).` : 'Wake: none booked.',

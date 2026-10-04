@@ -223,9 +223,12 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect((await run($, 'status')).text).toContain('Off by itself after 20m idle')
   expect((await run($, 'idle off yes')).text).toContain('Caffeine on with no end')
   expect((await run($, 'status')).text).toContain('until you turn it off\nCache TTL')
-  expect((await run($, 'status')).text).toContain('No idle stop: on until you turn it off')
-  await run($, 'idle 20m')
+  expect((await run($, 'status')).text).toContain('No idle stop this time: on until you turn it off')
+  // off, then on again: the idle stop is back
+  await run($, 'off')
+  await run($, 'on')
   expect((await run($, 'status')).text).toContain('until you turn it off (or 20m idle)')
+  expect((await run($, 'status')).text).toContain('Off by itself after 20m idle')
 
   // near the 5-hour line: paused, no pokes
   await run($, 'idle off yes')

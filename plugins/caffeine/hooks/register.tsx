@@ -255,7 +255,7 @@ async function editInBand($: EngineInterface, c: Caffeine): Promise<void> {
 async function goAway($: EngineInterface, c: Caffeine): Promise<void> {
   const at = (await $.clock.now()) + AWAY
   await switchOn($, c, true, at)
-  tell($, `on until ${clock(at, at - AWAY)}.`)
+  tell($, `keeping the cache warm until ${clock(at, at - AWAY)}.`)
 }
 
 // What the pokes cost against one cache rewrite.
@@ -429,7 +429,7 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
 const help = [
   '/caffeine              turn it on or off for this session',
   '/caffeine on | off',
-  '/caffeine for 2h       on, and off again after 2h (90m, 1h30m)',
+  '/caffeine warm 1h      keep the cache warm for 1h, then off (90m, 1h30m; alone: 1h)',
   '/caffeine until 18:00  on, and off again at 18:00 (6pm)',
   '/caffeine poke         poke now',
   '/caffeine message …    what the poke says (alone: show it; "reset": the default)',
@@ -639,7 +639,7 @@ export const register: Register = on => {
         await switchOn($, c, false)
         return { text: 'Caffeine off.' }
       case 'for':
-      case 'away': {
+      case 'warm': {
         const ms = value ? parseDuration(value) : AWAY
         if (ms === null) return { text: `Not a duration I know: ${value}. Try 2h, 90m or 1h30m.` }
         await switchOn($, c, true, now + ms)
@@ -818,7 +818,7 @@ export const register: Register = on => {
           {c.isOn ? 'turn off' : 'turn on'}
         </Button>
         <Button key="caffeine-away" plain dimColor hotkey="l" onPress={() => void goAway($, c)}>
-          away 1h
+          keep warm 1h
         </Button>
         <Button key="caffeine-edit" plain dimColor hotkey="e" onPress={() => void editInBand($, c)}>
           message

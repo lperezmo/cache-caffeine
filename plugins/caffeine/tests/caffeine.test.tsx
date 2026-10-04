@@ -354,6 +354,6 @@ test('auto turns it on past the context size, once; away 1h; cost reads the sess
   const ui = await $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   await ui.press({ key: 'caffeine-away' })
   expect((await run($, 'status')).text).toContain('until 10:00')
-  expect((await run($, 'away 30m')).text).toBe('Caffeine on until 09:30.')
+  expect((await run($, 'warm 30m')).text).toBe('Caffeine on until 09:30.')
   await ui.unmount()
 })

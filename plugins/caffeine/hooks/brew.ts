@@ -37,15 +37,42 @@ export function overLine(limits: readonly Limit[]): { label: string; percent: nu
   return null
 }
 
-// The TTL the session's requests ask for, as Claude Code picks it from its
-// environment: FORCE_PROMPT_CACHING_5M wins, then ENABLE_PROMPT_CACHING_1H.
-export function ttlFrom(force5m: string | undefined, enable1h: string | undefined): number {
+// The TTL Claude Code's environment pins, or null when it leaves the choice
+// automatic: CLAUDE_CODE_PROMPT_CACHE_TTL ("5m" or "1h") wins, then
+// FORCE_PROMPT_CACHING_5M, then ENABLE_PROMPT_CACHING_1H.
+export function ttlFromEnv(cacheTtl: string | undefined, force5m: string | undefined, enable1h: string | undefined): number | null {
+  const v = cacheTtl?.trim().toLowerCase()
+  if (v === '1h') return TTL_1H
+  if (v === '5m') return TTL_5M
   if (isSet(force5m)) return TTL_5M
   if (isSet(enable1h)) return TTL_1H
-  return TTL_5M
+  return null
 }
 
 const isSet = (v: string | undefined) => v !== undefined && v !== '' && v !== '0' && v.toLowerCase() !== 'false'
+
+// Claude Code's automatic choice: 1 hour on a Claude subscription within its
+// usage limits (the only sessions with rate-limit windows), else 5 minutes.
+export function ttlByPlan(limits: readonly Limit[]): number {
+  return limits.length > 0 && limits.every(l => l.percentUsed < 100) ? TTL_1H : TTL_5M
+}
+
+// The TTL one request was written at, read off what it cost: the session's
+// cost went up by `delta` dollars for `u`, and only the cache write's rate is
+// unknown (2x for 1h, 1.25x for 5m). Null when the request wrote too little
+// to tell, the model's price is unknown, or the rate fits neither (another
+// request, a subagent's, landed in between).
+export function ttlFromCost(delta: number, u: Usage, model: string): number | null {
+  const price = inputPrice(model)
+  if (price === null || u.cache_creation_input_tokens < 1000 || !(delta > 0)) {
+    return null
+  }
+  const rest = u.input_tokens + u.output_tokens * 5 + u.cache_read_input_tokens * readRate(model)
+  const rate = ((delta * 1e6) / price - rest) / u.cache_creation_input_tokens
+  if (Math.abs(rate - 2) < 0.1) return TTL_1H
+  if (Math.abs(rate - 1.25) < 0.1) return TTL_5M
+  return null
+}
 
 // When the next poke goes out, given the last request, or null with none yet.
 export function nextPokeAt(lastAt: number, every: number): number | null {

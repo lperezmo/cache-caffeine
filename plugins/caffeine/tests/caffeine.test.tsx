@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { awakeArgv, blocking, cronAt, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter } from '../hooks/wake'
-import { clock, defaultEvery, dollars, equivalents, readRate, tokens, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlFrom, wasWarm } from '../hooks/brew'
+import { clock, defaultEvery, dollars, equivalents, readRate, tokens, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
 
 const PROPS = {
   hasSurvey: false,
@@ -36,10 +36,24 @@ test('durations, times and the cadence', () => {
   expect(span(45_000)).toBe('45s')
   expect(defaultEvery(TTL_1H)).toBe(15 * MIN)
   expect(defaultEvery(TTL_5M)).toBe(150_000)
-  expect(ttlFrom(undefined, '1')).toBe(TTL_1H)
-  expect(ttlFrom('1', '1')).toBe(TTL_5M)
-  expect(ttlFrom(undefined, undefined)).toBe(TTL_5M)
-  expect(ttlFrom(undefined, '0')).toBe(TTL_5M)
+  expect(ttlFromEnv(undefined, undefined, '1')).toBe(TTL_1H)
+  expect(ttlFromEnv(undefined, '1', '1')).toBe(TTL_5M)
+  expect(ttlFromEnv('1h', '1', undefined)).toBe(TTL_1H)
+  expect(ttlFromEnv('5m', undefined, '1')).toBe(TTL_5M)
+  expect(ttlFromEnv(undefined, undefined, undefined)).toBeNull()
+  expect(ttlFromEnv(undefined, undefined, '0')).toBeNull()
+  expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 19 }])).toBe(TTL_1H)
+  expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 100 }])).toBe(TTL_5M)
+  expect(ttlByPlan([])).toBe(TTL_5M)
+  // two real Haiku requests, as Claude Code priced them (1h writes)
+  const haiku = 'claude-haiku-4-5-20251001'
+  expect(ttlFromCost(0.013878, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, haiku)).toBe(TTL_1H)
+  expect(ttlFromCost(0.0202628, { input_tokens: 10, output_tokens: 74, cache_read_input_tokens: 26348, cache_creation_input_tokens: 8624 }, haiku)).toBe(TTL_1H)
+  expect(ttlFromCost(0.009781, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 6011 }, haiku)).toBe(TTL_5M)
+  // too little written to tell, an unknown price, a subagent's cost mixed in
+  expect(ttlFromCost(0.002, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 200 }, haiku)).toBeNull()
+  expect(ttlFromCost(0.0138, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, 'other')).toBeNull()
+  expect(ttlFromCost(0.05, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, haiku)).toBeNull()
   expect(nextPokeAt(0, MIN)).toBeNull()
   expect(nextPokeAt(1000, MIN)).toBe(1000 + MIN)
   expect(wasWarm({ cache_read_input_tokens: 90_000, cache_creation_input_tokens: 200 })).toBe(true)
@@ -217,6 +231,9 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect(submitted.length).toBe(sent)
   expect((await run($, 'status')).text).toContain('paused · 5h limit 93%')
 
+  // a subscription (it has rate-limit windows) defaults to the 1h cache
+  expect((await run($, 'status')).text).toContain('Cache TTL 1h (the subscription default)')
+  expect((await run($, 'ttl 5m')).text).toContain('Cache TTL 5m')
   expect((await run($, 'every 10m')).text).toContain('past the 5m cache')
   expect((await run($, 'ttl 1h')).text).toContain('Cache TTL 1h')
   expect((await run($, 'every 10m')).text).toBe('Poking 10m after the last request.')

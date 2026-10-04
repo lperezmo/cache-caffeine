@@ -4,7 +4,7 @@
 
 A Claude Code mod that keeps the prompt cache warm while you step away, and wakes Claude up when the usage limit resets.
 
-Claude Code caches the conversation for 5 minutes (or 1 hour with `ENABLE_PROMPT_CACHING_1H`). Come back after it expires and the next turn writes the whole context to the cache again. With caffeine on, a short poke goes out before the cache expires, so your next turn reads the cache instead.
+Claude Code caches the conversation for 1 hour on a Claude subscription and 5 minutes on an API key. Come back after it expires and the next turn writes the whole context to the cache again. With caffeine on, a short poke goes out before the cache expires, so your next turn reads the cache instead.
 
 ```
 caffeine on · poke at 14:32 (in 12m) · 3 pokes   t: turn off   l: away 1h   e: message
@@ -38,7 +38,7 @@ The row above the prompt has the switch (`t`), on-for-an-hour (`l`) and the mess
 | `/caffeine poke` | poke now |
 | `/caffeine message <text>` | what the poke says (`reset` for the default, "poke, just say okay") |
 | `/caffeine every 10m` | how long after the last request to poke (`auto`: 15m on a 1h cache, 2m 30s on 5m) |
-| `/caffeine ttl 1h` | set the cache TTL if caffeine reads it wrong (`auto` to undo) |
+| `/caffeine ttl 1h` | pin the cache TTL (`auto` to go back to detecting it) |
 | `/caffeine idle 8h` | turn off after this long without a turn of your own (`off` for never) |
 | `/caffeine band off` | no row; shows in the status line instead, for when other mods use the band |
 | `/caffeine auto 100k` | turn on by itself once the context passes 100k tokens (`off` for never, the default) |
@@ -56,7 +56,7 @@ The row above the prompt has the switch (`t`), on-for-an-hour (`l`) and the mess
 - It waits while Claude is working and pauses when the 5-hour window is over 90% or the weekly one over 95%.
 - It skips the poke once the cache has already expired, since that would only write it again.
 - It turns itself off after 8 hours without a turn of your own (change with `/caffeine idle`).
-- It reads two environment variables, `ENABLE_PROMPT_CACHING_1H` and `FORCE_PROMPT_CACHING_5M`, to learn the TTL. No network, no files, no shell.
+- It works out the cache TTL by itself: from what each request cost (a 1-hour write costs 2x input, a 5-minute one 1.25x), else from `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M` or `ENABLE_PROMPT_CACHING_1H`, else Claude Code's default for your plan. No network and no files; the only process it starts is the keep-awake one below.
 - A wake is a one-shot `CronCreate` job in the session. Until it fires, caffeine keeps the cache warm (if the limit allows pokes) and keeps the computer from sleeping: `powershell` with `SetThreadExecutionState` on Windows, `caffeinate` on macOS, `systemd-inhibit` on Linux. Turn that off with `/caffeine wake awake off`.
 - On waking it sends a phone notification through Claude Code's `PushNotification`; `/caffeine wake push off` stops it.
 - The session has to stay open. After `claude --resume`, caffeine picks its booked wake back up.

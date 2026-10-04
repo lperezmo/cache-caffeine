@@ -19,7 +19,9 @@ import {
   tokens,
   TTL_1H,
   TTL_5M,
-  ttlFrom,
+  ttlByPlan,
+  ttlFromCost,
+  ttlFromEnv,
   wasWarm,
   writeRate,
 } from './brew'
@@ -55,9 +57,11 @@ type Caffeine = Brew & {
   limits: Limit[]
   context: number
   model: string
-  // the TTL from Claude Code's environment, and the person's override
-  envTtl: number
+  // the TTL: the person's override, Claude Code's environment, and what the
+  // session's own requests cost; else Claude Code's automatic choice by plan
   ttl: number | null
+  envTtl: number | null
+  measuredTtl: number | null
   // settings kept across sessions
   message: string
   every: number | null
@@ -83,7 +87,17 @@ type Caffeine = Brew & {
 const MINUTE = 60_000
 const AWAY = 60 * MINUTE
 
-const ttlOf = (c: Caffeine) => c.ttl ?? c.envTtl
+// what the requests cost is the truth; the environment and the plan are what Claude Code should pick
+const ttlOf = (c: Caffeine) => c.ttl ?? c.measuredTtl ?? c.envTtl ?? ttlByPlan(c.limits)
+
+// Where the TTL caffeine works with comes from, for /caffeine status.
+function ttlSource(c: Caffeine): string {
+  if (c.ttl !== null) return 'set with /caffeine ttl'
+  if (c.measuredTtl !== null) return 'measured from what requests cost'
+  if (c.envTtl !== null) return 'from the environment'
+  if (c.limits.length) return 'the subscription default'
+  return c.lastAt ? 'the API-key default' : 'a guess until the first reply shows the plan'
+}
 const everyOf = (c: Caffeine) => c.every ?? defaultEvery(ttlOf(c))
 const ttlLabel = (ms: number) => (ms >= TTL_1H ? '1h' : '5m')
 
@@ -110,9 +124,13 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
   c.ttl = await setting<number | null>($, 'ttl', null)
   c.autoAt = await setting($, 'autoAt', 0)
   try {
-    c.envTtl = ttlFrom(await $.env.get('FORCE_PROMPT_CACHING_5M'), await $.env.get('ENABLE_PROMPT_CACHING_1H'))
+    c.envTtl = ttlFromEnv(
+      await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'),
+      await $.env.get('FORCE_PROMPT_CACHING_5M'),
+      await $.env.get('ENABLE_PROMPT_CACHING_1H'),
+    )
   } catch {
-    c.envTtl = TTL_5M
+    c.envTtl = null
   }
 }
 
@@ -145,6 +163,15 @@ function describe(c: Caffeine, now: number): { text: string; color?: string; isD
   }
   const at = nextPokeAt(c.lastAt, everyOf(c))!
   return { text: `caffeine on · poke at ${clock(at, now)} (in ${span(at - now)})${tail}`, color: 'green' }
+}
+
+async function costNow($: EngineInterface): Promise<number | null> {
+  try {
+    const usd = (await $.session.usage()).cost?.usd
+    return typeof usd === 'number' ? usd : null
+  } catch {
+    return null
+  }
 }
 
 async function refresh($: EngineInterface, c: Caffeine): Promise<void> {
@@ -409,7 +436,7 @@ const help = [
   '/caffeine auto 100k    turn on by itself once the context passes 100k tokens (off: never)',
   '/caffeine cost         what the pokes cost against one cache rewrite',
   '/caffeine every 10m    poke this long after the last request (alone: back to auto)',
-  '/caffeine ttl 1h|5m    the cache TTL, when Claude Code picks one caffeine cannot see (auto: undo)',
+  '/caffeine ttl 1h|5m    pin the cache TTL (auto: back to detecting it)',
   '/caffeine idle 8h|off  turn off after this long without a turn of your own',
   '/caffeine band on|off  the row above the prompt; off moves it to the status line',
   '/caffeine wake         wake Claude just after the usage limit resets',
@@ -437,8 +464,9 @@ export const register: Register = on => {
     limits: [],
     context: 0,
     model: '',
-    envTtl: TTL_5M,
     ttl: null,
+    envTtl: null,
+    measuredTtl: null,
     message: DEFAULT_MESSAGE,
     every: null,
     isBanded: true,
@@ -511,15 +539,27 @@ export const register: Register = on => {
   })
 
   // Each main-thread request reads the cached prompt and starts its TTL again.
+  // What it cost says which TTL it was written at.
   on('turn.step', async function* ($, e, next) {
-    if (e.agentId === undefined) {
-      c.model = e.model
-      void $.clock.now().then(t => {
-        c.lastAt = t
-        void keep($, c)
-      })
+    if (e.agentId !== undefined) {
+      return yield* next(e)
     }
-    return yield* next(e)
+    c.model = e.model
+    void $.clock.now().then(t => {
+      c.lastAt = t
+      void keep($, c)
+    })
+    const before = await costNow($)
+    const result = yield* next(e)
+    const after = await costNow($)
+    if (result.usage && before !== null && after !== null) {
+      const ttl = ttlFromCost(after - before, result.usage, result.usage.model || e.model)
+      if (ttl !== null && ttl !== c.measuredTtl) {
+        c.measuredTtl = ttl
+        void refresh($, c)
+      }
+    }
+    return result
   })
 
   on('turn.start', async ($, e, next) => {
@@ -655,7 +695,7 @@ export const register: Register = on => {
         c.ttl = ttl
         await $.store.set('ttl', ttl)
         await refresh($, c)
-        return { text: `Cache TTL ${ttlLabel(ttlOf(c))}${c.ttl === null ? ' (from the environment)' : ''}; poking ${span(everyOf(c))} after the last request.` }
+        return { text: `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}); poking ${span(everyOf(c))} after the last request.` }
       }
       case 'idle': {
         const ms = value === 'off' || value === 'never' ? 0 : parseDuration(value)
@@ -677,7 +717,7 @@ export const register: Register = on => {
         const block = blocking(c.limits)
         const lines = [
           describe(c, now).text,
-          `Cache TTL ${ttlLabel(ttlOf(c))}${c.ttl === null ? ' (from the environment)' : ''} · poke ${span(everyOf(c))} after the last request${c.every === null ? ' (auto)' : ''}`,
+          `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}) · poke ${span(everyOf(c))} after the last request${c.every === null ? ' (auto)' : ''}`,
           `Off by itself after ${c.idle ? span(c.idle) : 'never'} idle · auto ${c.autoAt ? `past ${tokens(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
           c.lastWarm === null ? '' : `The last poke found the cache ${c.lastWarm ? 'warm' : 'cold'}.`,
           `The poke says: ${c.message}`,

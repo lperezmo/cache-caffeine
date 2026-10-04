@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { blocking, cronAt, fromCron, isNear, MARK, parseWhen, wakeAfter } from '../hooks/wake'
+import { blocking, isNear, MARK, parseWhen, wakeAfter } from '../hooks/wake'
 import { pokeWasCold, readTiming, warmth } from '../hooks/brew'
 import { clock, defaultEvery, dollars, equivalents, readRate, sized, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
 
@@ -253,7 +253,7 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect((await run($, 'nonsense')).text).toContain('Not a caffeine command')
 })
 
-test('the wake: windows, times and cron lines', () => {
+test('the wake: windows and times', () => {
   const five = { kind: 'five_hour', percentUsed: 100, resetsAt: new Date(at(14, 10)).toISOString() }
   const week = { kind: 'seven_day', percentUsed: 40, resetsAt: new Date(at(9, 0, 8)).toISOString() }
   expect(blocking([five, week])?.label).toBe('5h')
@@ -262,8 +262,6 @@ test('the wake: windows, times and cron lines', () => {
   expect(isNear([{ ...five, percentUsed: 90 }])).toBe(true)
   expect(new Date(wakeAfter(at(14, 10))).getMinutes()).toBe(12)
   expect(new Date(wakeAfter(at(14, 28))).getMinutes()).toBe(31)
-  expect(cronAt(at(14, 12))).toBe('12 14 4 10 *')
-  expect(fromCron('12 14 4 10 *', at(9, 0))).toBe(at(14, 12))
   expect(parseWhen('+1h30m', at(9, 0))).toBe(at(10, 30))
   expect(parseWhen('2:30pm', at(9, 0))).toBe(at(14, 30))
   expect(parseWhen('soon', at(9, 0))).toBeNull()
@@ -282,13 +280,12 @@ test('cost: per-model cache read rates and the poke against a rewrite', () => {
   expect(dollars(100, 'some-other-model')).toBe('')
 })
 
-test('near the limit the band offers a wake; a press books it and keeps the cache warm until then', async ($, on) => {
+test('near the limit the band offers a wake; a press books it, keeps the cache warm until then, and fires it', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
   mock.env(on, {})
-  const crons: { cron: string; prompt: string }[] = []
-  const pushed: string[] = []
-  world(on, [], crons, pushed)
+  const submitted: string[] = []
+  world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   const resetsAt = at(11, 0)
   await $.session.measure({
@@ -303,11 +300,9 @@ test('near the limit the band offers a wake; a press books it and keeps the cach
   expect(await ui.find({ key: 'beneath' })).toBeDefined()
   await ui.press({ key: 'caffeine-wake' })
   await time.advance(100)
-  expect(crons.length).toBe(1)
-  expect(crons[0]!.cron).toBe(cronAt(wakeAfter(resetsAt)))
-  expect(crons[0]!.prompt.startsWith(MARK)).toBe(true)
   // caffeine came on with the wake, until it
   expect((await run($, 'status')).text).toContain(`until ${clock(wakeAfter(resetsAt), at(9, 0))}`)
+  expect((await run($, 'status')).text).toContain(`Wake: Claude continues at ${clock(wakeAfter(resetsAt), at(9, 0))}`)
   await ui.unmount()
   ui = await mount()
   expect(JSON.stringify(await ui.drawn())).toContain('Claude continues at')
@@ -316,19 +311,30 @@ test('near the limit the band offers a wake; a press books it and keeps the cach
   await ui.press({ key: 'caffeine-wake-cancel' })
   expect((await run($, 'status')).text).toContain('caffeine off')
   expect((await run($, 'status')).text).toContain('Wake: none booked.')
+  await ui.unmount()
 
-  // a wake at a time, and its fire
+  // a wake at a time: nothing before it, the wake prompt at it
+  expect((await run($, 'wake prompt run the tests again')).text).toContain('run the tests again')
   expect((await run($, 'wake +90m')).text).toContain('Booking the wake for 10:31')
   await time.advance(100)
-  expect(crons.length).toBe(2)
-  await $.prompt.submit({ text: crons[1]!.prompt } as never)
-  await time.settle()
-  expect(pushed.length).toBe(1)
+  await time.advance(85 * MIN)
+  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([])
+  await time.advance(10 * MIN)
+  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} run the tests again`])
   expect((await run($, 'status')).text).toContain('Wake: none booked.')
-  expect((await run($, 'wake prompt run the tests again')).text).toContain('run the tests again')
   expect((await run($, 'wake auto on')).text).toContain('on.')
   expect((await run($, 'wake nonsense')).text).toContain('Not a time I know')
-  await ui.unmount()
+})
+
+test('a booked wake survives a reload of the mod', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  // the test host has no session id, which reads as ''
+  mock.store(on, { wake: { session: '', at: at(12, 0), label: '5h' } })
+  mock.env(on, {})
+  world(on, [])
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  await time.advance(100)
+  expect((await run($, 'status')).text).toContain('Wake: Claude continues at 12:00')
 })
 
 test('auto turns it on past the context size, once; away 1h; cost reads the session', async ($, on) => {

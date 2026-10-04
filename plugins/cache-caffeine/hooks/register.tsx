@@ -28,7 +28,7 @@ import {
   writeRate,
 } from './brew'
 import type { Limit, Usage, Warmth } from './brew'
-import { blocking, cronAt, DEFAULT_WAKE, fromCron, isNear, MARK, parseWhen, wakeAfter, wholeMinute } from './wake'
+import { blocking, DEFAULT_WAKE, isNear, MARK, parseWhen, wakeAfter, wholeMinute } from './wake'
 import type { Block } from './wake'
 
 // The session's switch, kept by the host so a reload of the mod finds it.
@@ -41,8 +41,11 @@ const brew = atom({ plugin: 'cache-caffeine', key: 'brew' } as const, {
   isForever: false,
 })
 
-// A wake booked with CronCreate: its job, when it fires, and what it waits out.
-type Armed = { id: string; at: number; label: string }
+// A booked wake: when it fires, and what it waits out.
+type Armed = { at: number; label: string }
+
+// The booked wake as the store keeps it, so `--resume` finds it again.
+type KeptWake = { session: string; at: number; label: string }
 
 type Caffeine = Brew & {
   // a main-thread turn is running; its own requests keep the cache warm
@@ -233,10 +236,13 @@ function poke($: EngineInterface, c: Caffeine, now: number): void {
 }
 
 async function tick($: EngineInterface, c: Caffeine): Promise<void> {
+  const now = await $.clock.now()
+  if (c.armed && now >= c.armed.at) {
+    await fire($, c)
+  }
   if (!c.isOn) {
     return
   }
-  const now = await $.clock.now()
   if (c.until && now >= c.until) {
     const wasWake = c.isWakeLit
     await switchOn($, c, false)
@@ -304,22 +310,15 @@ function costLines(c: Caffeine): string[] {
   ].filter(Boolean)
 }
 
-// The wake: a one-shot CronCreate that submits the wake prompt at a set time.
+// The wake: caffeine's own timer, which submits the wake prompt at a set
+// time (once the session is idle), the same way a poke goes out. The store
+// keeps it under the session's id, so `--resume` picks it up again.
 
 async function arm($: EngineInterface, c: Caffeine, at: number, label: string): Promise<void> {
   await disarm($, c)
-  const prompt = `${MARK} ${await setting($, 'wakePrompt', DEFAULT_WAKE)}`
-  const made = await $.tool.call({ tool: 'CronCreate', cron: cronAt(at), prompt, recurring: false })
-  if (made.deny !== undefined) {
-    tell($, `could not book the wake: ${made.deny}`)
-    return
-  }
-  const id = (made.result as { id?: unknown } | undefined)?.id
-  if (made.isError || typeof id !== 'string') {
-    tell($, `could not book the wake: ${made.text ?? 'CronCreate gave no job id'}`)
-    return
-  }
-  c.armed = { id, at, label }
+  c.armed = { at, label }
+  const kept: KeptWake = { session: await sessionKey($), at, label }
+  await $.store.set('wake', kept).catch(() => undefined)
   // the cache stays warm until Claude picks the work back up
   if (!c.isOn) {
     await switchOn($, c, true, at)
@@ -333,32 +332,49 @@ async function arm($: EngineInterface, c: Caffeine, at: number, label: string): 
 async function disarm($: EngineInterface, c: Caffeine): Promise<boolean> {
   const armed = c.armed
   c.armed = null
+  await $.store.delete('wake').catch(() => undefined)
   if (c.isWakeLit) {
     await switchOn($, c, false)
   }
   $.ui.invalidate('ui.render')
-  if (!armed) {
-    return false
-  }
-  await $.tool.call({ tool: 'CronDelete', id: armed.id }).catch(() => undefined)
-  return true
+  return armed !== null
 }
 
-// After `--resume` the session's crons come back; take back the one that is ours.
+// The session's id, which a kept wake belongs to; '' where there is none.
+async function sessionKey($: EngineInterface): Promise<string> {
+  try {
+    return await $.session.id()
+  } catch {
+    return ''
+  }
+}
+
+// Sends the wake prompt: the wake is spent.
+async function fire($: EngineInterface, c: Caffeine): Promise<void> {
+  c.armed = null
+  c.isHit = false
+  await $.store.delete('wake').catch(() => undefined)
+  $.ui.invalidate('ui.render')
+  const prompt = `${MARK} ${await setting($, 'wakePrompt', DEFAULT_WAKE)}`
+  void $.prompt.submit({ text: prompt }).catch(() => undefined)
+}
+
+// After `--resume` (or a reload of the mod) the wake this session booked is
+// still ahead: take it back.
 async function adopt($: EngineInterface, c: Caffeine): Promise<void> {
   try {
-    const listed = await $.tool.call({ tool: 'CronList' })
-    const jobs = ((listed.result as { jobs?: { id: string; cron: string; prompt: string }[] } | undefined)?.jobs ?? []).filter(
-      j => j.prompt.startsWith(MARK),
-    )
-    const now = await $.clock.now()
-    const job = jobs.map(j => ({ ...j, at: fromCron(j.cron, now) })).find(j => j.at > now)
-    if (job && !c.armed) {
-      c.armed = { id: job.id, at: job.at, label: '' }
+    const kept = (await $.store.get('wake')) as KeptWake | null | undefined
+    if (!kept || c.armed || kept.session !== (await sessionKey($))) {
+      return
+    }
+    if (kept.at > (await $.clock.now())) {
+      c.armed = { at: kept.at, label: kept.label }
       $.ui.invalidate('ui.render')
+    } else {
+      await $.store.delete('wake')
     }
   } catch {
-    // no crons to read; nothing booked
+    // nothing kept; nothing booked
   }
 }
 
@@ -401,8 +417,6 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
       return { text: `On waking Claude will be told: ${value}${c.armed ? ' (from the next wake you book)' : ''}` }
     case 'auto':
       return flip('wakeAuto', 'Booking a wake whenever the limit hits:', false)
-    case 'push':
-      return flip('push', 'A phone notification on waking:', true)
     default: {
       const at = parseWhen(word, now)
       if (at === null) return { text: `Not a time I know: ${word}. Try 14:30, 2:30pm or +90m.` }
@@ -459,7 +473,7 @@ const help = [
   '/caffeine wake         wake Claude just after the usage limit resets',
   '/caffeine wake 14:30   at a time (2:30pm, +90m, +2h work too); off cancels',
   '/caffeine wake prompt …  what Claude is told on waking',
-  '/caffeine wake auto | push   book by itself at the limit; phone notification when it fires (on/off)',
+  '/caffeine wake auto     book the wake by itself whenever the limit hits (on/off)',
   '/caffeine status       what it is doing',
 ].join('\n')
 
@@ -642,17 +656,7 @@ export const register: Register = on => {
   })
 
   on('prompt.submit', async ($, e, next) => {
-    if (e.text.startsWith(MARK)) {
-      // our wake fired
-      c.armed = null
-      c.isHit = false
-      $.ui.invalidate('ui.render')
-      if (await setting($, 'push', true)) {
-        void $.tool
-          .call({ tool: 'PushNotification', message: 'caffeine: the wake fired and Claude is back at it.', status: 'proactive' })
-          .catch(() => undefined)
-      }
-    } else if (e.origin.kind !== 'plugin') {
+    if (e.origin.kind !== 'plugin') {
       c.isHit = false
     }
     return next(e)

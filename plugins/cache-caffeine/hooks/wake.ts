@@ -12,8 +12,7 @@ const LABELS: Record<string, string> = { five_hour: '5h', seven_day: 'weekly' }
 // The wake row shows from here: close enough to the line to plan a wake.
 export const NEAR = { five_hour: 90, seven_day: 95 } as const
 
-// Every wake prompt starts with this, so caffeine knows its own crons again
-// (after `--resume`, which restores them) and its own fires.
+// Every wake prompt starts with this, so it reads as caffeine's in the transcript.
 export const MARK = '[caffeine]'
 export const DEFAULT_WAKE = 'The usage limit has reset. Pick up where you left off.'
 
@@ -42,8 +41,8 @@ export function isNear(limits: readonly Limit[]): boolean {
   })
 }
 
-// A couple of minutes after the reset, and never on :00 or :30, where a
-// one-shot cron may fire up to 90 seconds early.
+// A couple of minutes after the reset, so the window has surely turned over
+// (and never on :00 or :30, the busiest minutes).
 export function wakeAfter(resetsAt: number): number {
   let at = Math.ceil((resetsAt + 2 * minute) / minute) * minute
   const m = new Date(at).getMinutes()
@@ -53,26 +52,8 @@ export function wakeAfter(resetsAt: number): number {
   return at
 }
 
-// "M H DoM Mon *" in local time, a one-shot's pinned minute.
-export function cronAt(at: number): string {
-  const d = new Date(at)
-  return `${d.getMinutes()} ${d.getHours()} ${d.getDate()} ${d.getMonth() + 1} *`
-}
-
-// A time someone picked, moved up to its next whole minute, as a cron fires.
+// A time someone picked, moved up to its next whole minute.
 export const wholeMinute = (at: number) => Math.ceil(at / minute) * minute
-
-// When a one-shot's "M H DoM Mon *" next fires after `now`. NaN for any other shape.
-export function fromCron(cron: string, now: number): number {
-  const parts = cron.trim().split(/\s+/).map(Number)
-  if (parts.length !== 5 || parts.slice(0, 4).some(Number.isNaN)) {
-    return Number.NaN
-  }
-  const [m, h, day, month] = parts as [number, number, number, number]
-  const year = new Date(now).getFullYear()
-  const at = new Date(year, month - 1, day, h, m).getTime()
-  return at > now - minute ? at : new Date(year + 1, month - 1, day, h, m).getTime()
-}
 
 // `14:30`, `2:30pm`, `9pm`, `+90m`, `+2h`, `+1h30m`: the time, or null.
 export function parseWhen(word: string, now: number): number | null {

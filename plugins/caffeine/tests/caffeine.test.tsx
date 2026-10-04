@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { awakeArgv, blocking, cronAt, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter } from '../hooks/wake'
+import { pokeWasCold, readTiming } from '../hooks/brew'
 import { clock, defaultEvery, dollars, equivalents, readRate, tokens, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
 
 const PROPS = {
@@ -64,6 +65,9 @@ test('durations, times and the cadence', () => {
   expect(overLine([{ kind: 'seven_day', percentUsed: 95 }])?.label).toBe('weekly')
 })
 
+// What the next request's response reports, for the turn.step stand-in.
+let stepResult: object | null = null
+
 // The engine beneath caffeine: the UI ops, the prompts it submits, the turns.
 function world(on: On, submitted: string[], crons: { cron: string; prompt: string }[] = [], pushed: string[] = []) {
   on('tool.call', ($, e) => {
@@ -99,7 +103,7 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('turn.step', async function* ($, e) {
-    return { turnId: e.turnId, index: e.index, answer: 'okay', toolUses: [], stopReason: 'end_turn', usage: null } as never
+    return { turnId: e.turnId, index: e.index, answer: 'okay', toolUses: [], stopReason: 'end_turn', usage: stepResult } as never
   })
   // what another mod (clawd-buddy) or the engine draws in the band beneath caffeine
   on('ui.render', ($, e) => {
@@ -109,8 +113,9 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
 }
 
 // One main-thread turn: its start, one request, its end.
-async function turn($: Engine, id: string, text: string, usage?: object) {
+async function turn($: Engine, id: string, text: string, usage?: object, stepUsage?: object) {
   await $.turn.start({ text, turnId: id })
+  stepResult = stepUsage ?? null
   for await (const _ of $.turn.step({ turnId: id, index: 0, model: 'claude-opus-5-5', messageCount: 3 } as never)) {
     // nothing streams
   }
@@ -372,4 +377,43 @@ test('auto turns it on past the context size, once; away 1h; cost reads the sess
   expect((await run($, 'warm')).text).toBe('Caffeine on, keeping the cache warm until 10:00.')
   expect((await run($, 'warm 30m')).text).toBe('Caffeine on, keeping the cache warm until 09:30.')
   expect((await run($, 'status')).text).toContain('until 09:30 (30m left)')
+})
+
+test('timing: a read after 5.5 minutes proves 1h, a rewrite under an hour means 5m, exempt after a compaction', () => {
+  const read = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 300 }
+  const wrote = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 2_000, cache_creation_input_tokens: 88_000 }
+  expect(readTiming(20 * MIN, read, false)).toEqual({ isCold: false, ttl: TTL_1H })
+  expect(readTiming(4 * MIN, read, false)).toEqual({ isCold: false, ttl: null })
+  expect(readTiming(20 * MIN, wrote, false)).toEqual({ isCold: true, ttl: TTL_5M })
+  expect(readTiming(90 * MIN, wrote, false)).toEqual({ isCold: true, ttl: null })
+  expect(readTiming(20 * MIN, wrote, true)).toEqual({ isCold: false, ttl: null })
+  expect(readTiming(20 * MIN, { ...wrote, cache_creation_input_tokens: 8_000 }, false)).toEqual({ isCold: false, ttl: null })
+  expect(pokeWasCold(read)).toBe(false)
+  expect(pokeWasCold(wrote)).toBe(true)
+})
+
+test('a poke that finds the cache cold turns caffeine off; timing sets the TTL where cost cannot', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, {})
+  const submitted: string[] = []
+  world(on, submitted)
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  const big = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 300, model: 'some-new-model' }
+
+  // a request read the cache after 20 minutes: the TTL is 1h, measured from timing
+  await turn($, 't1', 'hello', undefined, big)
+  await time.advance(20 * MIN)
+  await turn($, 't2', 'more', undefined, big)
+  expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from request timing)')
+
+  await run($, 'on')
+  await time.advance(48 * MIN + 5_000)
+  expect(submitted.length).toBe(1)
+  const cold = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 89_000, model: 'some-new-model' }
+  await turn($, 'p1', 'poke, just say okay', cold, cold)
+  const status = (await run($, 'status')).text
+  expect(status).toContain('caffeine off')
+  expect(status).toContain('The last poke found the cache cold.')
+  expect(status).toContain('The cache last went cold before 10:08, after 48m idle.')
 })

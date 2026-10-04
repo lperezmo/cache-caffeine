@@ -55,8 +55,9 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 - It is off until you turn it on, and only for the session you turn it on in.
 - It waits while Claude is working and pauses when the 5-hour window is over 90% or the weekly one over 95%.
 - It skips the poke once the cache has already expired, since that would only write it again.
+- If a poke finds the cache cold anyway (it writes more than a tenth of what it reads), the pokes are not doing their job, so caffeine turns itself off and says so.
 - It turns itself off after 8 hours without a turn of your own, unless you confirm `/caffeine forever` (change the length with `/caffeine idle`).
-- It works out the cache TTL by itself: from what each request cost (a 1-hour write costs 2x input, a 5-minute one 1.25x), else from `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M` or `ENABLE_PROMPT_CACHING_1H`, else Claude Code's default for your plan. No network and no files; the only process it starts is the keep-awake one below.
+- It works out the cache TTL by itself: from what each request cost (a 1-hour write costs 2x input, a 5-minute one 1.25x), else from `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M` or `ENABLE_PROMPT_CACHING_1H`, else from request timing (the cache still read after more than 5 minutes idle means 1 hour), else Claude Code's default for your plan. No network and no files; the only process it starts is the keep-awake one below.
 - A wake is a one-shot `CronCreate` job in the session. Until it fires, caffeine keeps the cache warm (if the limit allows pokes) and keeps the computer from sleeping: `powershell` with `SetThreadExecutionState` on Windows, `caffeinate` on macOS, `systemd-inhibit` on Linux. Turn that off with `/caffeine wake awake off`.
 - On waking it sends a phone notification through Claude Code's `PushNotification`; `/caffeine wake push off` stops it.
 - The session has to stay open. After `claude --resume`, caffeine picks its booked wake back up.

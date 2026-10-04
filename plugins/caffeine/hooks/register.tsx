@@ -14,6 +14,8 @@ import {
   parseClock,
   parseDuration,
   pokeGuess,
+  pokeWasCold,
+  readTiming,
   readRate,
   span,
   tokens,
@@ -22,7 +24,6 @@ import {
   ttlByPlan,
   ttlFromCost,
   ttlFromEnv,
-  wasWarm,
   writeRate,
 } from './brew'
 import type { Limit, Usage } from './brew'
@@ -63,6 +64,13 @@ type Caffeine = Brew & {
   ttl: number | null
   envTtl: number | null
   measuredTtl: number | null
+  // what request timing says, for models caffeine has no price for
+  timedTtl: number | null
+  // the next request follows a compaction, which rewrites the cache anyway
+  isAfterCompact: boolean
+  // the last time a request found the cache cold, and the gap before it
+  coldAt: number
+  coldGap: number
   // settings kept across sessions
   message: string
   every: number | null
@@ -90,13 +98,14 @@ const MINUTE = 60_000
 const WARM = 60 * MINUTE
 
 // what the requests cost is the truth; the environment and the plan are what Claude Code should pick
-const ttlOf = (c: Caffeine) => c.ttl ?? c.measuredTtl ?? c.envTtl ?? ttlByPlan(c.limits)
+const ttlOf = (c: Caffeine) => c.ttl ?? c.measuredTtl ?? c.envTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
 
 // Where the TTL caffeine works with comes from, for /caffeine status.
 function ttlSource(c: Caffeine): string {
   if (c.ttl !== null) return 'set with /caffeine ttl'
   if (c.measuredTtl !== null) return 'measured from what requests cost'
   if (c.envTtl !== null) return 'from the environment'
+  if (c.timedTtl !== null) return 'measured from request timing'
   if (c.limits.length) return 'the subscription default'
   return c.lastAt ? 'the API-key default' : 'a guess until the first reply shows the plan'
 }
@@ -504,6 +513,10 @@ export const register: Register = on => {
     ttl: null,
     envTtl: null,
     measuredTtl: null,
+    timedTtl: null,
+    isAfterCompact: false,
+    coldAt: 0,
+    coldGap: 0,
     message: DEFAULT_MESSAGE,
     every: null,
     isBanded: true,
@@ -581,20 +594,30 @@ export const register: Register = on => {
     if (e.agentId !== undefined) {
       return yield* next(e)
     }
+    const at = await $.clock.now()
+    const gap = c.lastAt ? at - c.lastAt : 0
+    // a first request, a compaction or another model writes the cache whatever the TTL
+    const isExempt = c.lastAt === 0 || c.isAfterCompact || (c.model !== '' && c.model !== e.model)
     c.model = e.model
-    void $.clock.now().then(t => {
-      c.lastAt = t
-      void keep($, c)
-    })
+    c.lastAt = at
+    c.isAfterCompact = false
+    void keep($, c)
     const before = await costNow($)
     const result = yield* next(e)
     const after = await costNow($)
-    if (result.usage && before !== null && after !== null) {
-      const ttl = ttlFromCost(after - before, result.usage, result.usage.model || e.model)
-      if (ttl !== null && ttl !== c.measuredTtl) {
-        c.measuredTtl = ttl
-        void refresh($, c)
+    if (result.usage) {
+      const priced = before !== null && after !== null ? ttlFromCost(after - before, result.usage, result.usage.model || e.model) : null
+      if (priced !== null) c.measuredTtl = priced
+      const timing = readTiming(gap, result.usage, isExempt)
+      if (timing.ttl !== null) c.timedTtl = timing.ttl
+      if (timing.isCold) {
+        c.coldAt = at
+        c.coldGap = gap
+        if (c.isOn && c.poke !== 'running') {
+          tell($, `the cache had gone cold after ${span(gap)} idle; this request wrote it again.`)
+        }
       }
+      if (priced !== null || timing.ttl !== null) void refresh($, c)
     }
     return result
   })
@@ -620,11 +643,16 @@ export const register: Register = on => {
           c.lastPoke = e.usage
           c.spent += equivalents(e.usage, e.usage.model || c.model, ttlOf(c))
         }
-        const warm = wasWarm(e.usage)
-        if (warm === false && c.lastWarm !== false) {
-          tell($, `that poke found the cache cold. /caffeine every ${span(everyOf(c) / 2)} pokes sooner.`)
+        if (e.usage && pokeWasCold(e.usage)) {
+          c.lastWarm = false
+          await switchOn($, c, false)
+          tell(
+            $,
+            `turned off: its poke found the cache cold (it wrote ${tokens(e.usage.cache_creation_input_tokens)} tokens again), so the pokes were not keeping it warm. /caffeine status says why it may be; turn it on again to retry.`,
+          )
+        } else if (e.usage) {
+          c.lastWarm = true
         }
-        c.lastWarm = warm
       }
       await keep($, c)
       await refresh($, c)
@@ -648,6 +676,12 @@ export const register: Register = on => {
       c.isHit = false
     }
     return next(e)
+  })
+
+  on('session.compact', async ($, e, next) => {
+    const done = await next(e)
+    c.isAfterCompact = true
+    return done
   })
 
   on('session.end', ($, e, next) => {
@@ -763,6 +797,7 @@ export const register: Register = on => {
           `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}) · poke ${span(everyOf(c))} after the last request${c.every === null ? ' (auto)' : ''}`,
           `${c.isForever ? 'No idle stop this time: on until you turn it off' : `Off by itself after ${span(c.idle)} idle`} · auto ${c.autoAt ? `past ${tokens(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
           c.lastWarm === null ? '' : `The last poke found the cache ${c.lastWarm ? 'warm' : 'cold'}.`,
+          c.coldAt ? `The cache last went cold before ${clock(c.coldAt, now)}, after ${span(c.coldGap)} idle.` : '',
           `The poke says: ${c.message}`,
           c.armed ? `Wake: Claude continues at ${clock(c.armed.at, now)} (in ${span(c.armed.at - now)}).` : 'Wake: none booked.',
           block ? `${block.label} limit ${block.percent}%, resets ${clock(block.resetsAt, now)}.` : '',

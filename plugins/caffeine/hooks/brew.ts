@@ -187,3 +187,34 @@ export function dollars(equiv: number, model: string): string {
   const usd = (equiv * price) / 1e6
   return usd < 0.01 ? 'under $0.01' : `about $${usd.toFixed(2)}`
 }
+
+// What one main-thread request says about the cache from its timing alone, as
+// Cache Keeper reads it: the gap since the request before, and how the prompt
+// split between reading the cache and writing it. Past 5.5 minutes a 5-minute
+// cache has expired, so a mostly-read prompt proves the 1-hour TTL, and a
+// mostly-written one means the cache had gone cold (under an hour: a 5-minute
+// TTL, unless something else rewrote it, which `isExempt` says: the first
+// request after a compaction or a model switch). Small prompts say nothing.
+export type Reading = { isCold: boolean; ttl: number | null }
+
+export const GAP = 5.5 * minute
+
+export function readTiming(gap: number, u: Usage, isExempt: boolean): Reading {
+  const total = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+  if (total < 30_000 || gap < GAP) {
+    return { isCold: false, ttl: null }
+  }
+  if (u.cache_read_input_tokens / total > 0.8) {
+    return { isCold: false, ttl: TTL_1H }
+  }
+  if (u.cache_creation_input_tokens / total > 0.5 && !isExempt) {
+    return { isCold: true, ttl: gap < TTL_1H ? TTL_5M : null }
+  }
+  return { isCold: false, ttl: null }
+}
+
+// A poke that wrote more than a tenth of what it read found the cache cold:
+// the pokes are not keeping it warm.
+export function pokeWasCold(u: Usage): boolean {
+  return u.cache_creation_input_tokens > 0.1 * u.cache_read_input_tokens
+}

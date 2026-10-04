@@ -1,7 +1,7 @@
 // Pure parts of the wake (what was wakey): which usage window is in the way,
 // when to wake, and the cron line for it.
 
-import { parseClock } from './brew'
+import { parseClock, parseDuration } from './brew'
 import type { Limit } from './brew'
 
 // What a wake is waiting out: the window, how full it is, and when it resets.
@@ -52,15 +52,9 @@ export function wakeAfter(resetsAt: number): number {
   return at
 }
 
-// A time someone picked, moved up to its next whole minute.
-export const wholeMinute = (at: number) => Math.ceil(at / minute) * minute
-
-// `14:30`, `2:30pm`, `9pm`, `+90m`, `+2h`, `+1h30m`: the time, or null.
-export function parseWhen(word: string, now: number): number | null {
-  const relative = /^\+(?:(\d+)h)?(?:(\d+)m?)?$/.exec(word.trim().toLowerCase())
-  if (relative && (relative[1] || relative[2])) {
-    const ms = (Number(relative[1] ?? 0) * 60 + Number(relative[2] ?? 0)) * minute
-    return ms > 0 ? now + ms : null
-  }
-  return parseClock(word, now)
+// When to wake, as people type it: a span from now (`1 min`, `in 20 minutes`,
+// `+90m`, `2 hours`) or a clock time (`14:30`, `2:30pm`, `at 3pm`, `noon`).
+export function parseWhen(text: string, now: number): number | null {
+  const ms = parseDuration(text)
+  return ms !== null ? now + ms : parseClock(text, now)
 }

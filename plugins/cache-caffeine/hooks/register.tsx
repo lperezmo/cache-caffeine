@@ -28,7 +28,7 @@ import {
   writeRate,
 } from './brew'
 import type { Limit, Usage, Warmth } from './brew'
-import { blocking, DEFAULT_WAKE, isNear, MARK, parseWhen, wakeAfter, wholeMinute } from './wake'
+import { blocking, DEFAULT_WAKE, isNear, MARK, parseWhen, wakeAfter } from './wake'
 import type { Block } from './wake'
 
 // The session's switch, kept by the host so a reload of the mod finds it.
@@ -418,10 +418,10 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
     case 'auto':
       return flip('wakeAuto', 'Booking a wake whenever the limit hits:', false)
     default: {
-      const at = parseWhen(word, now)
-      if (at === null) return { text: `Not a time I know: ${word}. Try 14:30, 2:30pm or +90m.` }
-      $.clock.after(50, () => void arm($, c, wholeMinute(at), ''))
-      return { text: `Booking the wake for ${clock(wholeMinute(at), now)}…` }
+      const at = parseWhen(args, now)
+      if (at === null) return { text: `Not a time I know: ${args}. Try 1 min, in 20 minutes, 14:30 or 3pm.` }
+      $.clock.after(50, () => void arm($, c, at, ''))
+      return { text: `Booking the wake for ${clock(at, now)} (in ${span(at - now)})…` }
     }
   }
 }
@@ -471,7 +471,7 @@ const help = [
   '/caffeine idle 8h      turn off after this long without a turn of your own',
   '/caffeine band on|off  the row above the prompt; off moves it to the status line',
   '/caffeine wake         wake Claude just after the usage limit resets',
-  '/caffeine wake 14:30   at a time (2:30pm, +90m, +2h work too); off cancels',
+  '/caffeine 1 min        wake Claude at a time: in 20 minutes, 2 hours, 14:30, 3pm (also: wake 1 min); wake off cancels',
   '/caffeine wake prompt …  what Claude is told on waking',
   '/caffeine wake auto     book the wake by itself whenever the limit hits (on/off)',
   '/caffeine status       what it is doing',
@@ -783,8 +783,13 @@ export const register: Register = on => {
         ]
         return { text: lines.filter(Boolean).join('\n') }
       }
-      default:
+      default: {
+        // a bare time is a wake: /caffeine 1 min, /caffeine at 3pm
+        if (parseWhen(args, now) !== null) {
+          return wakeCommand($, c, args)
+        }
         return { text: `Not a caffeine command: ${word}\n${help}` }
+      }
     }
   })
 

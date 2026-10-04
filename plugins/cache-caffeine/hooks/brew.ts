@@ -88,20 +88,38 @@ export function wasWarm(usage: { cache_read_input_tokens: number; cache_creation
   return usage.cache_read_input_tokens > usage.cache_creation_input_tokens
 }
 
-// `2h`, `90m`, `1h30m`, `2.5m`, `150s`: milliseconds, or null.
-export function parseDuration(word: string): number | null {
-  const w = word.trim().toLowerCase()
-  const m = /^(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+)s)?$/.exec(w)
-  if (!m || (!m[1] && !m[2] && !m[3])) {
-    return null
+const UNITS: Record<string, number> = { h: hour, m: minute, s: second }
+
+// A span of time as people type it: `2h`, `90m`, `1h30m`, `2.5m`, `150s`,
+// `1 min`, `5 minutes`, `2 hours`, `1 hour 30 min`, `in 20 minutes`, `+90m`.
+// Milliseconds, or null.
+export function parseDuration(text: string): number | null {
+  const t = text
+    .trim()
+    .toLowerCase()
+    .replace(/^(in|for)\s+/, '')
+    .replace(/^\+/, '')
+    .replace(/,|\band\b/g, ' ')
+  const part = /(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)(?![a-z])/g
+  let ms = 0
+  let rest = t
+  for (const m of t.matchAll(part)) {
+    ms += Number(m[1]) * UNITS[m[2]![0]!]!
+    rest = rest.replace(m[0], '')
   }
-  const ms = Number(m[1] ?? 0) * hour + Number(m[2] ?? 0) * minute + Number(m[3] ?? 0) * second
-  return ms > 0 ? Math.round(ms) : null
+  return ms > 0 && rest.trim() === '' ? Math.round(ms) : null
 }
 
-// `18:00`, `6pm`, `6:30pm`: the next such time after `now`, or null.
+// `18:00`, `6pm`, `6:30 pm`, `at 3pm`, `noon`, `midnight`: the next such time
+// after `now`, or null.
 export function parseClock(word: string, now: number): number | null {
-  const time = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/.exec(word.trim().toLowerCase())
+  const w = word
+    .trim()
+    .toLowerCase()
+    .replace(/^at\s+/, '')
+    .replace(/^noon$/, '12:00')
+    .replace(/^midnight$/, '0:00')
+  const time = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?$/.exec(w)
   if (!time || (!time[2] && !time[3])) {
     return null
   }
@@ -109,7 +127,7 @@ export function parseClock(word: string, now: number): number | null {
   const m = Number(time[2] ?? 0)
   if (time[3]) {
     if (h < 1 || h > 12) return null
-    h = (h % 12) + (time[3] === 'pm' ? 12 : 0)
+    h = (h % 12) + (time[3].startsWith('p') ? 12 : 0)
   }
   if (h > 23 || m > 59) {
     return null

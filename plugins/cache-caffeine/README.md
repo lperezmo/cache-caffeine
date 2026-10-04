@@ -47,7 +47,7 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 | `/caffeine auto 100k` | turn on by itself once the context passes 100k tokens (`off` for never, the default) |
 | `/caffeine cost` | what a poke costs against one cache rewrite, and how long caffeine pays off for |
 | `/caffeine wake` | wake Claude just after the usage limit resets |
-| `/caffeine wake 14:30` | wake at a time (`2:30pm`, `+90m`); `wake off` cancels |
+| `/caffeine 1 min` | wake Claude at a time: `in 20 minutes`, `2 hours`, `14:30`, `at 3pm`, `noon` (`wake 1 min` works too); `wake off` cancels |
 | `/caffeine wake prompt <text>` | what Claude is told on waking |
 | `/caffeine wake auto` | book the wake by itself whenever the limit hits |
 | `/caffeine status` | what it is doing and whether the last poke found the cache warm |

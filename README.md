@@ -38,7 +38,8 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 | `/caffeine message <text>` | what the poke says (`reset` for the default, "poke, just say okay") |
 | `/caffeine every 10m` | how long after the last request to poke (`auto`: 15m on a 1h cache, 2m 30s on 5m) |
 | `/caffeine ttl 1h` | pin the cache TTL (`auto` to go back to detecting it) |
-| `/caffeine idle 8h` | turn off after this long without a turn of your own (`off` for never) |
+| `/caffeine idle 8h` | turn off after this long without a turn of your own |
+| `/caffeine forever` | no end at all: asks you to confirm, then keeps the cache warm until you turn it off (`idle off` does the same) |
 | `/caffeine band off` | no row; shows in the status line instead, for when other mods use the band |
 | `/caffeine auto 100k` | turn on by itself once the context passes 100k tokens (`off` for never, the default) |
 | `/caffeine cost` | what a poke costs against one cache rewrite, and how long caffeine pays off for |
@@ -54,7 +55,7 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 - It is off until you turn it on, and only for the session you turn it on in.
 - It waits while Claude is working and pauses when the 5-hour window is over 90% or the weekly one over 95%.
 - It skips the poke once the cache has already expired, since that would only write it again.
-- It turns itself off after 8 hours without a turn of your own (change with `/caffeine idle`).
+- It turns itself off after 8 hours without a turn of your own, unless you confirm `/caffeine forever` (change the length with `/caffeine idle`).
 - It works out the cache TTL by itself: from what each request cost (a 1-hour write costs 2x input, a 5-minute one 1.25x), else from `CLAUDE_CODE_PROMPT_CACHE_TTL`, `FORCE_PROMPT_CACHING_5M` or `ENABLE_PROMPT_CACHING_1H`, else Claude Code's default for your plan. No network and no files; the only process it starts is the keep-awake one below.
 - A wake is a one-shot `CronCreate` job in the session. Until it fires, caffeine keeps the cache warm (if the limit allows pokes) and keeps the computer from sleeping: `powershell` with `SetThreadExecutionState` on Windows, `caffeinate` on macOS, `systemd-inhibit` on Linux. Turn that off with `/caffeine wake awake off`.
 - On waking it sends a phone notification through Claude Code's `PushNotification`; `/caffeine wake push off` stops it.

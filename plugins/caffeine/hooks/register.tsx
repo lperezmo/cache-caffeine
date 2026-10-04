@@ -429,6 +429,36 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
   }
 }
 
+const FOREVER = 'Yes, no end'
+const KEEP_STOP = 'Keep the idle stop'
+
+// No end at all, but only once the person has said so: the dialog spells out
+// what it costs, and a run with no one to ask takes a trailing "yes" instead.
+async function forever($: EngineInterface, c: Caffeine, isSure: boolean): Promise<{ text: string }> {
+  const perDay = Math.round((24 * 60 * MINUTE) / everyOf(c))
+  if (!isSure) {
+    let answer: string
+    try {
+      answer = await $.ui.ask(
+        `Keep the cache warm with no end? Caffeine will poke ${span(everyOf(c))} after the last request until you turn it off, about ${perDay} pokes a day while you are away, and each one uses your plan's usage.`,
+        { header: 'caffeine', options: [FOREVER, KEEP_STOP] },
+      )
+    } catch {
+      return { text: 'No one to ask here. /caffeine forever yes confirms it.' }
+    }
+    if (answer !== FOREVER) {
+      return { text: `Kept: caffeine still turns itself off after ${span(c.idle || DEFAULT_IDLE)} without a turn of your own.` }
+    }
+  }
+  c.idle = 0
+  await $.store.set('idle', 0)
+  if (!c.isOn || c.until) {
+    await switchOn($, c, true)
+  }
+  await refresh($, c)
+  return { text: 'Caffeine on with no end: it keeps the cache warm until you turn it off. /caffeine idle 8h brings the idle stop back.' }
+}
+
 const help = [
   '/caffeine              turn it on or off for this session',
   '/caffeine on | off',
@@ -440,7 +470,8 @@ const help = [
   '/caffeine cost         what the pokes cost against one cache rewrite',
   '/caffeine every 10m    poke this long after the last request (alone: back to auto)',
   '/caffeine ttl 1h|5m    pin the cache TTL (auto: back to detecting it)',
-  '/caffeine idle 8h|off  turn off after this long without a turn of your own',
+  '/caffeine forever      on with no end at all, once you confirm (also: idle off)',
+  '/caffeine idle 8h      turn off after this long without a turn of your own',
   '/caffeine band on|off  the row above the prompt; off moves it to the status line',
   '/caffeine wake         wake Claude just after the usage limit resets',
   '/caffeine wake 14:30   at a time (2:30pm, +90m, +2h work too); off cancels',
@@ -700,8 +731,14 @@ export const register: Register = on => {
         await refresh($, c)
         return { text: `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}); poking ${span(everyOf(c))} after the last request.` }
       }
+      case 'forever':
+        return forever($, c, value.toLowerCase() === 'yes')
       case 'idle': {
-        const ms = value === 'off' || value === 'never' ? 0 : parseDuration(value)
+        const [first = '', second = ''] = value.toLowerCase().split(/\s+/)
+        if (first === 'off' || first === 'never') {
+          return forever($, c, second === 'yes')
+        }
+        const ms = parseDuration(value)
         if (ms === null) return { text: `Not a duration I know: ${value || '(none)'}. Try 8h, or off.` }
         c.idle = ms
         await $.store.set('idle', ms)
@@ -721,7 +758,7 @@ export const register: Register = on => {
         const lines = [
           describe(c, now).text,
           `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}) · poke ${span(everyOf(c))} after the last request${c.every === null ? ' (auto)' : ''}`,
-          `Off by itself after ${c.idle ? span(c.idle) : 'never'} idle · auto ${c.autoAt ? `past ${tokens(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
+          `${c.idle ? `Off by itself after ${span(c.idle)} idle` : 'No idle stop: on until you turn it off'} · auto ${c.autoAt ? `past ${tokens(c.autoAt)}` : 'off'} · band ${c.isBanded ? 'on' : 'off'}`,
           c.lastWarm === null ? '' : `The last poke found the cache ${c.lastWarm ? 'warm' : 'cold'}.`,
           `The poke says: ${c.message}`,
           c.armed ? `Wake: Claude continues at ${clock(c.armed.at, now)} (in ${span(c.armed.at - now)}).` : 'Wake: none booked.',

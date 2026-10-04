@@ -218,8 +218,17 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect((await run($, 'status')).text).toContain('caffeine off')
   const sent = submitted.length
 
+  // no end: asked first (no dialog here, so it says how to confirm); a yes removes the stop
+  expect((await run($, 'forever')).text).toContain('/caffeine forever yes confirms it')
+  expect((await run($, 'status')).text).toContain('Off by itself after 20m idle')
+  expect((await run($, 'idle off yes')).text).toContain('Caffeine on with no end')
+  expect((await run($, 'status')).text).toContain('until you turn it off\nCache TTL')
+  expect((await run($, 'status')).text).toContain('No idle stop: on until you turn it off')
+  await run($, 'idle 20m')
+  expect((await run($, 'status')).text).toContain('until you turn it off (or 20m idle)')
+
   // near the 5-hour line: paused, no pokes
-  await run($, 'idle off')
+  await run($, 'idle off yes')
   await run($, 'on')
   await turn($, 't3', 'more work')
   await $.session.measure({

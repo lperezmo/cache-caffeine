@@ -2,12 +2,18 @@
 
 # caffeine
 
-A Claude Code mod that keeps the prompt cache warm while you step away.
+A Claude Code mod that keeps the prompt cache warm while you step away, and wakes Claude up when the usage limit resets.
 
 Claude Code caches the conversation for 5 minutes (or 1 hour with `ENABLE_PROMPT_CACHING_1H`). Come back after it expires and the next turn writes the whole context to the cache again. With caffeine on, a short poke goes out before the cache expires, so your next turn reads the cache instead.
 
 ```
-caffeine on · poke at 14:32 (in 12m) · 3 pokes   t: turn off   e: message
+caffeine on · poke at 14:32 (in 12m) · 3 pokes   t: turn off   l: away 1h   e: message
+```
+
+Near the usage limit a second row offers the wake:
+
+```
+5h limit 96% · resets 14:10 (in 2h 05m)   u: wake Claude at 14:12   n: not now
 ```
 
 ## Install
@@ -21,19 +27,26 @@ Needs Claude Code 2.1.287 or newer (mods on by default).
 
 ## Use
 
-The row above the prompt has the switch (`t`) and the message editor (`e`). Focus the row with ctrl+x tab or a click.
+The row above the prompt has the switch (`t`), on-for-an-hour (`l`) and the message editor (`e`); the wake row books the wake (`u`) or puts it off (`n`). Focus the row with ctrl+x tab or a click.
 
 | Command | What it does |
 | --- | --- |
 | `/caffeine` | on or off for this session |
 | `/caffeine for 2h` | on, then off after 2 hours |
 | `/caffeine until 18:00` | on, then off at 18:00 |
+| `/caffeine away` | on for an hour (`away 30m` for another length) |
 | `/caffeine poke` | poke now |
 | `/caffeine message <text>` | what the poke says (`reset` for the default, "poke, just say okay") |
 | `/caffeine every 10m` | how long after the last request to poke (`auto`: 15m on a 1h cache, 2m 30s on 5m) |
 | `/caffeine ttl 1h` | set the cache TTL if caffeine reads it wrong (`auto` to undo) |
 | `/caffeine idle 8h` | turn off after this long without a turn of your own (`off` for never) |
 | `/caffeine band off` | no row; shows in the status line instead, for when other mods use the band |
+| `/caffeine auto 100k` | turn on by itself once the context passes 100k tokens (`off` for never, the default) |
+| `/caffeine cost` | what a poke costs against one cache rewrite, and how long caffeine pays off for |
+| `/caffeine wake` | wake Claude just after the usage limit resets |
+| `/caffeine wake 14:30` | wake at a time (`2:30pm`, `+90m`); `wake off` cancels |
+| `/caffeine wake prompt <text>` | what Claude is told on waking |
+| `/caffeine wake auto` / `awake` / `push` | book the wake by itself at the limit; keep the computer awake until it; a phone notification when it fires |
 | `/caffeine status` | what it is doing and whether the last poke found the cache warm |
 
 ## What it does and does not do
@@ -44,7 +57,9 @@ The row above the prompt has the switch (`t`) and the message editor (`e`). Focu
 - It skips the poke once the cache has already expired, since that would only write it again.
 - It turns itself off after 8 hours without a turn of your own (change with `/caffeine idle`).
 - It reads two environment variables, `ENABLE_PROMPT_CACHING_1H` and `FORCE_PROMPT_CACHING_5M`, to learn the TTL. No network, no files, no shell.
-- The session has to stay open.
+- A wake is a one-shot `CronCreate` job in the session. Until it fires, caffeine keeps the cache warm (if the limit allows pokes) and keeps the computer from sleeping: `powershell` with `SetThreadExecutionState` on Windows, `caffeinate` on macOS, `systemd-inhibit` on Linux. Turn that off with `/caffeine wake awake off`.
+- On waking it sends a phone notification through Claude Code's `PushNotification`; `/caffeine wake push off` stops it.
+- The session has to stay open. After `claude --resume`, caffeine picks its booked wake back up.
 
 ## License
 

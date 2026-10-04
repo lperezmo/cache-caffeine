@@ -107,3 +107,53 @@ export function span(ms: number): string {
   if (s >= 60) return s % 60 ? `${Math.floor(s / 60)}m ${two(s % 60)}s` : `${s / 60}m`
   return `${s}s`
 }
+
+// What a request costs, in input-token equivalents (base input price = 1),
+// by the API's own ratios: output 5x, cache writes 1.25x (5m) or 2x (1h),
+// cache reads 0.1x, except 0.05x on Opus 5.5 and 0.025x on Fable 5.1 and
+// Mythos 5.1.
+export function readRate(model: string): number {
+  if (/fable-5-1|mythos-5-1/.test(model)) return 0.025
+  if (/opus-5-5/.test(model)) return 0.05
+  return 0.1
+}
+
+export const writeRate = (ttl: number) => (ttl >= TTL_1H ? 2 : 1.25)
+
+// API list input price, $ per million tokens, for the models caffeine knows.
+const PRICES: [RegExp, number][] = [
+  [/fable-5|mythos-5/, 10],
+  [/opus-5-5/, 4],
+  [/opus-[45]/, 5],
+  [/sonnet-5/, 2],
+  [/sonnet-4-6/, 3],
+  [/haiku-4-5/, 1],
+]
+
+export function inputPrice(model: string): number | null {
+  return PRICES.find(([re]) => re.test(model))?.[1] ?? null
+}
+
+export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+
+export function equivalents(u: Usage, model: string, ttl: number): number {
+  return u.input_tokens + u.output_tokens * 5 + u.cache_read_input_tokens * readRate(model) + u.cache_creation_input_tokens * writeRate(ttl)
+}
+
+// A poke over `context` cached tokens: the read, plus a short exchange.
+export const pokeGuess = (context: number): Usage => ({ input_tokens: 40, output_tokens: 10, cache_read_input_tokens: context, cache_creation_input_tokens: 60 })
+
+// 7.3k, 284k, 1.2M.
+export function tokens(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
+  if (n >= 1e4) return `${Math.round(n / 1e3)}k`
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
+  return String(Math.round(n))
+}
+
+export function dollars(equiv: number, model: string): string {
+  const price = inputPrice(model)
+  if (price === null) return ''
+  const usd = (equiv * price) / 1e6
+  return usd < 0.01 ? 'under $0.01' : `about $${usd.toFixed(2)}`
+}

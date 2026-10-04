@@ -2,7 +2,8 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { clock, defaultEvery, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlFrom, wasWarm } from '../hooks/brew'
+import { awakeArgv, blocking, cronAt, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter } from '../hooks/wake'
+import { clock, defaultEvery, dollars, equivalents, readRate, tokens, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlFrom, wasWarm } from '../hooks/brew'
 
 const PROPS = {
   hasSurvey: false,
@@ -50,7 +51,24 @@ test('durations, times and the cadence', () => {
 })
 
 // The engine beneath caffeine: the UI ops, the prompts it submits, the turns.
-function world(on: On, submitted: string[]) {
+function world(on: On, submitted: string[], crons: { cron: string; prompt: string }[] = [], pushed: string[] = []) {
+  on('tool.call', ($, e) => {
+    if (e.tool === 'CronCreate') {
+      crons.push({ cron: String(e.cron), prompt: String(e.prompt) })
+      return { result: { id: `job${crons.length}`, humanSchedule: 'once', recurring: false } }
+    }
+    if (e.tool === 'CronDelete') return { result: { id: String(e.id) } }
+    if (e.tool === 'CronList') return { result: { jobs: [] } }
+    if (e.tool === 'PushNotification') {
+      pushed.push(String(e.message))
+      return { result: { message: String(e.message) } }
+    }
+    return { deny: 'unexpected' }
+  })
+  on('process.spawn', async function* () {
+    // the keep-awake child: nothing to say, then done
+    return { code: 0, signal: null } as never
+  })
   on('ui.toast', () => ({ value: undefined }))
   on('ui.log', () => ({ value: undefined }))
   on('ui.invalidate', () => ({ value: undefined }))
@@ -203,4 +221,122 @@ test('it wears off, turns itself off when idle, and pauses near the usage limit'
   expect((await run($, 'ttl 1h')).text).toContain('Cache TTL 1h')
   expect((await run($, 'every 10m')).text).toBe('Poking 10m after the last request.')
   expect((await run($, 'nonsense')).text).toContain('Not a caffeine command')
+})
+
+test('the wake: windows, times, cron lines and keep-awake commands', () => {
+  const five = { kind: 'five_hour', percentUsed: 100, resetsAt: new Date(at(14, 10)).toISOString() }
+  const week = { kind: 'seven_day', percentUsed: 40, resetsAt: new Date(at(9, 0, 8)).toISOString() }
+  expect(blocking([five, week])?.label).toBe('5h')
+  expect(blocking([five, { ...week, percentUsed: 100 }])?.label).toBe('weekly')
+  expect(isNear([{ ...five, percentUsed: 89 }])).toBe(false)
+  expect(isNear([{ ...five, percentUsed: 90 }])).toBe(true)
+  expect(new Date(wakeAfter(at(14, 10))).getMinutes()).toBe(12)
+  expect(new Date(wakeAfter(at(14, 28))).getMinutes()).toBe(31)
+  expect(cronAt(at(14, 12))).toBe('12 14 4 10 *')
+  expect(fromCron('12 14 4 10 *', at(9, 0))).toBe(at(14, 12))
+  expect(parseWhen('+1h30m', at(9, 0))).toBe(at(10, 30))
+  expect(parseWhen('2:30pm', at(9, 0))).toBe(at(14, 30))
+  expect(parseWhen('soon', at(9, 0))).toBeNull()
+  expect(osOf('C:\\Users\\x\\.claude')).toBe('windows')
+  expect(osOf('/Users/x/.claude')).toBe('mac')
+  expect(osOf('/home/x/.claude')).toBe('linux')
+  expect(awakeArgv('windows', 60)[0]).toBe('powershell')
+  expect(awakeArgv('mac', 60)).toEqual(['caffeinate', '-i', '-t', '60'])
+  expect(awakeArgv('linux', 60).slice(0, 2)).toEqual(['systemd-inhibit', '--what=sleep:idle'])
+})
+
+test('cost: per-model cache read rates and the poke against a rewrite', () => {
+  expect(readRate('claude-opus-5-5')).toBe(0.05)
+  expect(readRate('claude-fable-5-1')).toBe(0.025)
+  expect(readRate('claude-sonnet-5-5')).toBe(0.1)
+  const poke = { input_tokens: 40, output_tokens: 10, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 60 }
+  expect(equivalents(poke, 'claude-opus-5-5', 3_600_000)).toBe(40 + 50 + 5000 + 120)
+  expect(tokens(284_000)).toBe('284k')
+  expect(tokens(7300)).toBe('7.3k')
+  expect(dollars(1_000_000, 'claude-opus-5-5')).toBe('about $4.00')
+  expect(dollars(100, 'claude-opus-5-5')).toBe('under $0.01')
+  expect(dollars(100, 'some-other-model')).toBe('')
+})
+
+test('near the limit the band offers a wake; a press books it and keeps the cache warm until then', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, {})
+  const crons: { cron: string; prompt: string }[] = []
+  const pushed: string[] = []
+  world(on, [], crons, pushed)
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  const resetsAt = at(11, 0)
+  await $.session.measure({
+    changed: ['rateLimits'],
+    context: { tokens: 1000, max: 200000, percent: 0.5 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 96, resetsAt: new Date(resetsAt).toISOString() }],
+  } as never)
+
+  const mount = () => $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  let ui = await mount()
+  expect(JSON.stringify(await ui.drawn())).toContain('5h limit 96%')
+  expect(await ui.find({ key: 'beneath' })).toBeDefined()
+  await ui.press({ key: 'caffeine-wake' })
+  await time.advance(100)
+  expect(crons.length).toBe(1)
+  expect(crons[0]!.cron).toBe(cronAt(wakeAfter(resetsAt)))
+  expect(crons[0]!.prompt.startsWith(MARK)).toBe(true)
+  // caffeine came on with the wake, until it
+  expect((await run($, 'status')).text).toContain(`until ${clock(wakeAfter(resetsAt), at(9, 0))}`)
+  await ui.unmount()
+  ui = await mount()
+  expect(JSON.stringify(await ui.drawn())).toContain('Claude continues at')
+
+  // cancelling the wake turns off what it turned on
+  await ui.press({ key: 'caffeine-wake-cancel' })
+  expect((await run($, 'status')).text).toContain('caffeine off')
+  expect((await run($, 'status')).text).toContain('Wake: none booked.')
+
+  // a wake at a time, and its fire
+  expect((await run($, 'wake +90m')).text).toContain('Booking the wake for 10:31')
+  await time.advance(100)
+  expect(crons.length).toBe(2)
+  await $.prompt.submit({ text: crons[1]!.prompt } as never)
+  await time.settle()
+  expect(pushed.length).toBe(1)
+  expect((await run($, 'status')).text).toContain('Wake: none booked.')
+  expect((await run($, 'wake prompt run the tests again')).text).toContain('run the tests again')
+  expect((await run($, 'wake auto on')).text).toContain('on.')
+  expect((await run($, 'wake nonsense')).text).toContain('Not a time I know')
+  await ui.unmount()
+})
+
+test('auto turns it on past the context size, once; away 1h; cost reads the session', async ($, on) => {
+  mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  world(on, [])
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  const measure = (n: number) =>
+    $.session.measure({ changed: ['context'], context: { tokens: n, max: 1_000_000, percent: n / 1e4 }, rateLimits: [] } as never)
+
+  expect((await run($, 'cost')).text).toContain('No reply yet')
+  expect((await run($, 'auto 100k')).text).toContain('passes 100k tokens')
+  await measure(90_000)
+  expect((await run($, 'status')).text).toContain('caffeine off')
+  await turn($, 't1', 'read the whole repo')
+  await measure(120_000)
+  expect((await run($, 'status')).text).toContain('caffeine on')
+  // turned off by hand: auto leaves it off for the session
+  await run($, 'off')
+  await measure(130_000)
+  expect((await run($, 'status')).text).toContain('caffeine off')
+
+  const cost = (await run($, 'cost')).text
+  expect(cost).toContain('Context 130k tokens on claude-opus-5-5, 1h cache')
+  expect(cost).toContain('cache read at 0.05x')
+  expect(cost).toContain('written again at 2x')
+  expect(cost).toContain('A rewrite costs about 39 pokes')
+
+  const ui = await $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  await ui.press({ key: 'caffeine-away' })
+  expect((await run($, 'status')).text).toContain('until 10:00')
+  expect((await run($, 'away 30m')).text).toBe('Caffeine on until 09:30.')
+  await ui.unmount()
 })

@@ -48,13 +48,14 @@ The row above the prompt has the switch (`t`) and the message editor (`e`), and 
 | `/caffeine cost` | what a poke costs against one cache rewrite, and how long caffeine pays off for |
 | `/caffeine wake` | wake Claude just after the usage limit resets |
 | `/caffeine 1 min` | wake Claude at a time: `in 20 minutes`, `2 hours`, `14:30`, `at 3pm`, `noon` (`wake 1 min` works too); `wake off` cancels |
-| `/caffeine wake prompt <text>` | what Claude is told on waking |
+| `/caffeine 20 min check the build` | a wake that tells Claude exactly that |
+| `/caffeine wake prompt <text>` | what Claude is told on every wake (`wake prompt default` goes back to the defaults) |
 | `/caffeine wake auto` | book the wake by itself whenever the limit hits |
 | `/caffeine status` | what it is doing and whether the last poke found the cache warm |
 
 ## What it does and does not do
 
-- **It sends prompts on your behalf.** Each poke is a real turn: it uses your plan's usage and adds a short exchange to the conversation. A poke is exactly the message you set (default "poke, just say okay"), and a wake is exactly the wake prompt you set (default "The usage limit has reset. Pick up where you left off."), with `[caffeine]` in front. Nothing read from the conversation, a file or anywhere else goes into either.
+- **It sends prompts on your behalf.** Each poke is a real turn: it uses your plan's usage and adds a short exchange to the conversation. A poke is exactly the message you set (default "poke, just say okay"), and a wake is exactly the text you gave that wake (`/caffeine 20 min check the build`), else the wake prompt you set, else the default ("The usage limit has reset. Pick up where you left off." after a limit reset, "Time's up. Pick up where you left off." at a time you picked), with `[caffeine]` in front. Nothing read from the conversation, a file or anywhere else goes into either.
 - It is off until you turn it on, and only for the session you turn it on in. It waits while Claude is working and pauses when the 5-hour window is over 90% or the weekly one over 95%.
 - It skips the poke once the cache has already expired, since that would only write it again. If a poke finds the cache cold anyway (it writes more than a tenth of what it reads), caffeine turns itself off and says so.
 - It turns itself off after 8 hours without a turn of your own, unless you confirm `/caffeine forever` for that run (change the length with `/caffeine idle`).

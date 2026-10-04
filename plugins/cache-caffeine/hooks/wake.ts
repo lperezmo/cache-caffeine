@@ -1,5 +1,5 @@
 // Pure parts of the wake (what was wakey): which usage window is in the way,
-// when to wake, and the cron line for it.
+// when to wake, and what Claude is told then.
 
 import { parseClock, parseDuration } from './brew'
 import type { Limit } from './brew'
@@ -14,7 +14,9 @@ export const NEAR = { five_hour: 90, seven_day: 95 } as const
 
 // Every wake prompt starts with this, so it reads as caffeine's in the transcript.
 export const MARK = '[caffeine]'
+// What Claude is told on waking: after a limit reset, or at a time picked.
 export const DEFAULT_WAKE = 'The usage limit has reset. Pick up where you left off.'
+export const DEFAULT_TIMER_WAKE = "Time's up. Pick up where you left off."
 
 const minute = 60_000
 
@@ -57,4 +59,18 @@ export function wakeAfter(resetsAt: number): number {
 export function parseWhen(text: string, now: number): number | null {
   const ms = parseDuration(text)
   return ms !== null ? now + ms : parseClock(text, now)
+}
+
+// A wake time and what to say then: `20 min check the build` is 20 minutes
+// from now, saying "check the build". The longest run of leading words that
+// reads as a time is the time; the rest (maybe nothing) is the text.
+export function parseWake(text: string, now: number): { at: number; text: string } | null {
+  const words = text.trim().split(/\s+/).filter(Boolean)
+  for (let k = words.length; k > 0; k--) {
+    const at = parseWhen(words.slice(0, k).join(' '), now)
+    if (at !== null) {
+      return { at, text: words.slice(k).join(' ') }
+    }
+  }
+  return null
 }

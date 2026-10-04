@@ -28,7 +28,7 @@ import {
   writeRate,
 } from './brew'
 import type { Limit, Usage, Warmth } from './brew'
-import { blocking, DEFAULT_WAKE, isNear, MARK, parseWhen, wakeAfter } from './wake'
+import { blocking, DEFAULT_TIMER_WAKE, DEFAULT_WAKE, isNear, MARK, parseWake, wakeAfter } from './wake'
 import type { Block } from './wake'
 
 // The session's switch, kept by the host so a reload of the mod finds it.
@@ -42,10 +42,10 @@ const brew = atom({ plugin: 'cache-caffeine', key: 'brew' } as const, {
 })
 
 // A booked wake: when it fires, and what it waits out.
-type Armed = { at: number; label: string }
+type Armed = { at: number; label: string; text: string }
 
 // The booked wake as the store keeps it, so `--resume` finds it again.
-type KeptWake = { session: string; at: number; label: string }
+type KeptWake = { session: string; at: number; label: string; text?: string }
 
 type Caffeine = Brew & {
   // a main-thread turn is running; its own requests keep the cache warm
@@ -238,7 +238,7 @@ function poke($: EngineInterface, c: Caffeine, now: number): void {
 async function tick($: EngineInterface, c: Caffeine): Promise<void> {
   const now = await $.clock.now()
   if (c.armed && now >= c.armed.at) {
-    await fire($, c)
+    await fire($, c, c.armed)
   }
   if (!c.isOn) {
     return
@@ -314,10 +314,10 @@ function costLines(c: Caffeine): string[] {
 // time (once the session is idle), the same way a poke goes out. The store
 // keeps it under the session's id, so `--resume` picks it up again.
 
-async function arm($: EngineInterface, c: Caffeine, at: number, label: string): Promise<void> {
+async function arm($: EngineInterface, c: Caffeine, at: number, label: string, text = ''): Promise<void> {
   await disarm($, c)
-  c.armed = { at, label }
-  const kept: KeptWake = { session: await sessionKey($), at, label }
+  c.armed = { at, label, text }
+  const kept: KeptWake = { session: await sessionKey($), at, label, text }
   await $.store.set('wake', kept).catch(() => undefined)
   // the cache stays warm until Claude picks the work back up
   if (!c.isOn) {
@@ -325,7 +325,7 @@ async function arm($: EngineInterface, c: Caffeine, at: number, label: string): 
     c.isWakeLit = true
   }
   const now = await $.clock.now()
-  tell($, `Claude continues at ${clock(at, now)} (in ${span(at - now)})${label ? `, after the ${label} reset` : ''}. Keep this session open.`)
+  tell($, `Claude continues at ${clock(at, now)} (in ${span(at - now)})${label ? `, after the ${label} reset` : ''}, told: ${await wakeText($, c.armed)}. Keep this session open.`)
   $.ui.invalidate('ui.render')
 }
 
@@ -349,13 +349,20 @@ async function sessionKey($: EngineInterface): Promise<string> {
   }
 }
 
+// What Claude is told on this wake: its own text, else the wake prompt you
+// set, else the default for its kind (after a limit reset, or at a time).
+async function wakeText($: EngineInterface, armed: Armed): Promise<string> {
+  const mine = (await setting($, 'wakePrompt', null)) as string | null
+  return armed.text || mine || (armed.label ? DEFAULT_WAKE : DEFAULT_TIMER_WAKE)
+}
+
 // Sends the wake prompt: the wake is spent.
-async function fire($: EngineInterface, c: Caffeine): Promise<void> {
+async function fire($: EngineInterface, c: Caffeine, armed: Armed): Promise<void> {
   c.armed = null
   c.isHit = false
   await $.store.delete('wake').catch(() => undefined)
   $.ui.invalidate('ui.render')
-  const prompt = `${MARK} ${await setting($, 'wakePrompt', DEFAULT_WAKE)}`
+  const prompt = `${MARK} ${await wakeText($, armed)}`
   void $.prompt.submit({ text: prompt }).catch(() => undefined)
 }
 
@@ -368,7 +375,7 @@ async function adopt($: EngineInterface, c: Caffeine): Promise<void> {
       return
     }
     if (kept.at > (await $.clock.now())) {
-      c.armed = { at: kept.at, label: kept.label }
+      c.armed = { at: kept.at, label: kept.label, text: kept.text ?? '' }
       $.ui.invalidate('ui.render')
     } else {
       await $.store.delete('wake')
@@ -411,17 +418,30 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
     case 'cancel':
       $.clock.after(50, () => void disarm($, c).then(was => tell($, was ? 'wake cancelled.' : 'no wake was booked.')))
       return { text: 'Cancelling the wake…' }
-    case 'prompt':
-      if (!value) return { text: `On waking Claude is told: ${await setting($, 'wakePrompt', DEFAULT_WAKE)}` }
+    case 'prompt': {
+      if (value.toLowerCase() === 'default') {
+        await $.store.delete('wakePrompt')
+        return { text: `Back to the defaults: "${DEFAULT_WAKE}" after a limit reset, "${DEFAULT_TIMER_WAKE}" at a time.` }
+      }
+      if (!value) {
+        const mine = (await setting($, 'wakePrompt', null)) as string | null
+        return {
+          text: mine
+            ? `On waking Claude is told: ${mine} (prompt default goes back to the defaults)`
+            : `On waking Claude is told "${DEFAULT_WAKE}" after a limit reset, "${DEFAULT_TIMER_WAKE}" at a time.`,
+        }
+      }
       await $.store.set('wakePrompt', value)
       return { text: `On waking Claude will be told: ${value}${c.armed ? ' (from the next wake you book)' : ''}` }
+    }
     case 'auto':
       return flip('wakeAuto', 'Booking a wake whenever the limit hits:', false)
     default: {
-      const at = parseWhen(args, now)
-      if (at === null) return { text: `Not a time I know: ${args}. Try 1 min, in 20 minutes, 14:30 or 3pm.` }
-      $.clock.after(50, () => void arm($, c, at, ''))
-      return { text: `Booking the wake for ${clock(at, now)} (in ${span(at - now)})…` }
+      const wake = parseWake(args, now)
+      if (wake === null) return { text: `Not a time I know: ${args}. Try 1 min, in 20 minutes, 14:30 or 3pm.` }
+      const { at, text } = wake
+      $.clock.after(50, () => void arm($, c, at, '', text))
+      return { text: `Booking the wake for ${clock(at, now)} (in ${span(at - now)})${text ? `, to say: ${text}` : ''}…` }
     }
   }
 }
@@ -472,7 +492,8 @@ const help = [
   '/caffeine band on|off  the row above the prompt; off moves it to the status line',
   '/caffeine wake         wake Claude just after the usage limit resets',
   '/caffeine 1 min        wake Claude at a time: in 20 minutes, 2 hours, 14:30, 3pm (also: wake 1 min); wake off cancels',
-  '/caffeine wake prompt …  what Claude is told on waking',
+  '/caffeine 20 min check the build   a wake that tells Claude exactly that',
+  '/caffeine wake prompt …  what Claude is told on every wake; wake prompt default goes back',
   '/caffeine wake auto     book the wake by itself whenever the limit hits (on/off)',
   '/caffeine status       what it is doing',
 ].join('\n')
@@ -778,14 +799,14 @@ export const register: Register = on => {
           c.lastWarm === null ? '' : `The last poke found the cache ${c.lastWarm ? 'warm' : 'cold'}.`,
           c.coldAt ? `The cache last went cold before ${clock(c.coldAt, now)}, after ${span(c.coldGap)} idle.` : '',
           `The poke says: ${c.message}`,
-          c.armed ? `Wake: Claude continues at ${clock(c.armed.at, now)} (in ${span(c.armed.at - now)}).` : 'Wake: none booked.',
+          c.armed ? `Wake: Claude continues at ${clock(c.armed.at, now)} (in ${span(c.armed.at - now)}), told: ${await wakeText($, c.armed)}.` : 'Wake: none booked.',
           block ? `${block.label} limit ${block.percent}%, resets ${clock(block.resetsAt, now)}.` : '',
         ]
         return { text: lines.filter(Boolean).join('\n') }
       }
       default: {
         // a bare time is a wake: /caffeine 1 min, /caffeine at 3pm
-        if (parseWhen(args, now) !== null) {
+        if (parseWake(args, now) !== null) {
           return wakeCommand($, c, args)
         }
         return { text: `Not a caffeine command: ${word}\n${help}` }

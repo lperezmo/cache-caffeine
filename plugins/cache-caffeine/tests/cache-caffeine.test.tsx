@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { blocking, isNear, MARK, parseWhen, wakeAfter } from '../hooks/wake'
+import { blocking, DEFAULT_TIMER_WAKE, DEFAULT_WAKE, isNear, MARK, parseWake, parseWhen, wakeAfter } from '../hooks/wake'
 import { pokeWasCold, readTiming, warmth } from '../hooks/brew'
 import { clock, defaultEvery, dollars, equivalents, readRate, sized, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
 
@@ -283,6 +283,11 @@ test('the wake: windows and times', () => {
   expect(parseWhen('1 min', at(9, 0))).toBe(at(9, 1))
   expect(parseWhen('in 20 minutes', at(9, 0))).toBe(at(9, 20))
   expect(parseWhen('at 3pm', at(9, 0))).toBe(at(15, 0))
+  expect(parseWake('20 min check the build', at(9, 0))).toEqual({ at: at(9, 20), text: 'check the build' })
+  expect(parseWake('1 hour 30 min', at(9, 0))).toEqual({ at: at(10, 30), text: '' })
+  expect(parseWake('at 3pm run the tests', at(9, 0))).toEqual({ at: at(15, 0), text: 'run the tests' })
+  expect(parseWake('20 min 5 things', at(9, 0))).toEqual({ at: at(9, 20), text: '5 things' })
+  expect(parseWake('check the build', at(9, 0))).toBeNull()
 })
 
 test('cost: per-model cache read rates and the poke against a rewrite', () => {
@@ -352,10 +357,37 @@ test('a booked wake survives a reload of the mod', async ($, on) => {
   // the test host has no session id, which reads as ''
   mock.store(on, { wake: { session: '', at: at(12, 0), label: '5h' } })
   mock.env(on, {})
-  world(on, [])
+  const submitted: string[] = []
+  world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   await time.advance(100)
   expect((await run($, 'status')).text).toContain('Wake: Claude continues at 12:00')
+  // a limit wake says the limit reset
+  for (let i = 0; i < 18; i++) await time.advance(10 * MIN)
+  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_WAKE}`])
+})
+
+test('a wake at a time says so, unless it was given words of its own', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, {})
+  const submitted: string[] = []
+  world(on, submitted)
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  expect((await run($, '1 min')).text).toContain('(in 1m)')
+  await time.advance(100)
+  await time.advance(1 * MIN)
+  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_TIMER_WAKE}`])
+  // the wake's own turn runs before the next prompt can go out
+  await turn($, 'w1', submitted.at(-1)!)
+  expect((await run($, '2 min check the build')).text).toContain('(in 2m), to say: check the build')
+  await time.advance(100)
+  expect((await run($, 'status')).text).toContain('told: check the build')
+  // the 5s tick that comes after the wake time sends it
+  await time.advance(2 * MIN + 5_000)
+  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_TIMER_WAKE}`, `${MARK} check the build`])
+  expect((await run($, 'wake prompt be brief')).text).toContain('be brief')
+  expect((await run($, 'wake prompt default')).text).toContain('Back to the defaults')
 })
 
 test('auto turns it on past the context size, once; away 1h; cost reads the session', async ($, on) => {

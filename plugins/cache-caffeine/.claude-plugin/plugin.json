@@ -1,6 +1,6 @@
 {
   "name": "cache-caffeine",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Keeps the prompt cache warm while you step away: a short poke before the cache expires, so the next turn reads the cache instead of writing it again. A row above the prompt turns it on and off and edits the message. Near the usage limit it books Claude a wake right after the reset.",
   "author": {
     "name": "Luis Perez Morales",

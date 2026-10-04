@@ -3,7 +3,7 @@ import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 import { awakeArgv, blocking, cronAt, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter } from '../hooks/wake'
-import { pokeWasCold, readTiming } from '../hooks/brew'
+import { pokeWasCold, readTiming, warmth } from '../hooks/brew'
 import { clock, defaultEvery, dollars, equivalents, readRate, tokens, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
 
 const PROPS = {
@@ -416,4 +416,41 @@ test('a poke that finds the cache cold turns caffeine off; timing sets the TTL w
   expect(status).toContain('caffeine off')
   expect(status).toContain('The last poke found the cache cold.')
   expect(status).toContain('The cache last went cold before 10:08, after 48m idle.')
+})
+
+test('the cup cools from 100F with steam to 40F without', () => {
+  const ttl = 60 * MIN
+  expect(warmth(ttl, ttl)).toEqual({ degrees: 100, steam: '≋≋≋', color: '#ff5a36' })
+  expect(warmth(ttl, ttl, 1).steam).toBe('≈≋≈')
+  expect(warmth(ttl / 2, ttl)).toEqual({ degrees: 70, steam: '≈ ≈', color: '#ff9a3c' })
+  expect(warmth(ttl * 0.2, ttl).degrees).toBe(52)
+  expect(warmth(ttl * 0.2, ttl).steam).toBe(' ~ ')
+  expect(warmth(0, ttl)).toEqual({ degrees: 40, steam: '   ', color: '#5b8fd9' })
+  expect(warmth(-5 * MIN, ttl).degrees).toBe(40)
+})
+
+test('the band draws the cup: --F before a reply, then the temperature, cooling', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  world(on, [])
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  const mount = () => $.ui.mount({ plugin: 'caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  let ui = await mount()
+  let drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('c[_]')
+  expect(drawn).toContain('--°F')
+  await ui.unmount()
+  await turn($, 't1', 'hello')
+  ui = await mount()
+  drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('100°F')
+  expect(drawn).toContain('≋≋≋')
+  await ui.unmount()
+  await time.advance(30 * MIN)
+  ui = await mount()
+  drawn = JSON.stringify(await ui.drawn())
+  expect(drawn).toContain('70°F')
+  expect(drawn).not.toContain('≋')
+  await ui.unmount()
 })

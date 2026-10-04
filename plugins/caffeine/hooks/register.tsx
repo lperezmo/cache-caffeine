@@ -24,9 +24,10 @@ import {
   ttlByPlan,
   ttlFromCost,
   ttlFromEnv,
+  warmth,
   writeRate,
 } from './brew'
-import type { Limit, Usage } from './brew'
+import type { Limit, Usage, Warmth } from './brew'
 import { awakeArgv, blocking, cronAt, DEFAULT_WAKE, fromCron, isNear, MARK, osOf, parseWhen, wakeAfter, wholeMinute } from './wake'
 import type { Block } from './wake'
 
@@ -80,6 +81,8 @@ type Caffeine = Brew & {
   autoAt: number
   // the band's message field is open
   isEditing: boolean
+  // the steam's shimmer
+  frame: number
   bandId: string
   // the wake
   armed: Armed | null
@@ -193,11 +196,17 @@ async function costNow($: EngineInterface): Promise<number | null> {
   }
 }
 
+function cup(c: Caffeine, now: number): Warmth | null {
+  return c.lastAt ? warmth(c.lastAt + ttlOf(c) - now, ttlOf(c), c.frame) : null
+}
+
 async function refresh($: EngineInterface, c: Caffeine): Promise<void> {
   if (c.isBanded || !c.isOn) {
     $.ui.status(undefined)
   } else {
-    $.ui.status(describe(c, await $.clock.now()).text)
+    const now = await $.clock.now()
+    const w = cup(c, now)
+    $.ui.status(`${w ? `${w.degrees}°F ` : ''}${describe(c, now).text}`)
   }
   $.ui.invalidate('ui.render')
 }
@@ -523,6 +532,7 @@ export const register: Register = on => {
     idle: DEFAULT_IDLE,
     autoAt: 0,
     isEditing: false,
+    frame: 0,
     bandId: '',
     armed: null,
     isHit: false,
@@ -551,9 +561,18 @@ export const register: Register = on => {
     }
     $.clock.after(50, () => void adopt($, c))
     $.clock.every(5_000, () => void tick($, c))
-    // the countdowns
+    // the countdowns, and the cup cooling
     $.clock.every(30_000, () => {
-      if (c.isOn || c.armed || isNear(c.limits)) void refresh($, c)
+      if (c.isOn || c.armed || isNear(c.limits) || c.lastAt) void refresh($, c)
+    })
+    $.clock.every(1_200, () => {
+      if (!c.isBanded || c.isEditing || !c.lastAt) return
+      void $.clock.now().then(now => {
+        if (cup(c, now)?.steam.trim()) {
+          c.frame += 1
+          $.ui.invalidate('ui.render')
+        }
+      })
     })
     await refresh($, c)
     return started
@@ -853,8 +872,9 @@ export const register: Register = on => {
       </Box>
     ) : null
 
-    // the switch row
+    // the switch row, under its cup
     const line = describe(c, now)
+    const warm = cup(c, now)
     const row = !c.isBanded ? null : c.isEditing ? (
       <Box key="caffeine" flexDirection="row" columnGap={2}>
         <Input
@@ -880,24 +900,37 @@ export const register: Register = on => {
         </Button>
       </Box>
     ) : (
-      <Box key="caffeine" flexDirection="row" columnGap={2}>
-        <Text key="text" color={line.color} dimColor={line.isDim} wrap="truncate-end">
-          {line.text}
+      <Box key="caffeine" flexDirection="column">
+        <Text key="steam" color={warm?.color} dimColor={!warm}>
+          {` ${warm?.steam ?? '   '}`}
         </Text>
-        <Button
-          key="caffeine-toggle"
-          plain
-          hotkey="t"
-          onPress={() => {
-            if (c.isOn) c.isAutoDeclined = true
-            void switchOn($, c, !c.isOn)
-          }}
-        >
-          {c.isOn ? 'turn off' : 'turn on'}
-        </Button>
-        <Button key="caffeine-edit" plain dimColor hotkey="e" onPress={() => void editInBand($, c)}>
-          message
-        </Button>
+        <Box key="caffeine-row" flexDirection="row" columnGap={2}>
+          <Box key="caffeine-cup" flexDirection="row" columnGap={1}>
+            <Text key="cup" color={warm?.color} dimColor={!warm}>
+              c[_]
+            </Text>
+            <Text key="degrees" color={warm?.color} dimColor={!warm}>
+              {warm ? `${warm.degrees}°F` : '--°F'}
+            </Text>
+          </Box>
+          <Text key="text" color={line.color} dimColor={line.isDim} wrap="truncate-end">
+            {line.text}
+          </Text>
+          <Button
+            key="caffeine-toggle"
+            plain
+            hotkey="t"
+            onPress={() => {
+              if (c.isOn) c.isAutoDeclined = true
+              void switchOn($, c, !c.isOn)
+            }}
+          >
+            {c.isOn ? 'turn off' : 'turn on'}
+          </Button>
+          <Button key="caffeine-edit" plain dimColor hotkey="e" onPress={() => void editInBand($, c)}>
+            message
+          </Button>
+        </Box>
       </Box>
     )
 

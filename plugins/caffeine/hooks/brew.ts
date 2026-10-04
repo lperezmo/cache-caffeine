@@ -218,3 +218,20 @@ export function readTiming(gap: number, u: Usage, isExempt: boolean): Reading {
 export function pokeWasCold(u: Usage): boolean {
   return u.cache_creation_input_tokens > 0.1 * u.cache_read_input_tokens
 }
+
+// The cup on the row: how warm the cache is, as a coffee's temperature from
+// 100F (just written or read) down to 40F (expired), the steam over it
+// thinning as it cools, and a color from red to blue. `frame` shimmers the
+// steam.
+export type Warmth = { degrees: number; steam: string; color: string }
+
+const STEAM = [['   '], [' ~ ', '  ~'], ['≈ ≈', ' ≈≈'], ['≋≋≋', '≈≋≈']]
+
+export function warmth(left: number, ttl: number, frame = 0): Warmth {
+  const f = Math.max(0, Math.min(1, left / ttl))
+  const degrees = Math.round(40 + 60 * f)
+  const level = degrees >= 85 ? 3 : degrees >= 65 ? 2 : degrees >= 48 ? 1 : 0
+  const frames = STEAM[level]!
+  const color = degrees >= 85 ? '#ff5a36' : degrees >= 70 ? '#ff9a3c' : degrees >= 55 ? '#f2c94c' : degrees > 40 ? '#9cb8d8' : '#5b8fd9'
+  return { degrees, steam: frames[frame % frames.length]!, color }
+}

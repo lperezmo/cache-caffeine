@@ -112,6 +112,8 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
     return { text: e.text }
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('session.compact', ($, e) => ({ messages: e.messages }) as never)
+  on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('turn.step', async function* ($, e) {
     return { turnId: e.turnId, index: e.index, answer: 'okay', toolUses: [], stopReason: 'end_turn', usage: stepResult } as never
@@ -124,10 +126,10 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
 }
 
 // One main-thread turn: its start, one request, its end.
-async function turn($: Engine, id: string, text: string, usage?: object, stepUsage?: object) {
+async function turn($: Engine, id: string, text: string, usage?: object, stepUsage?: object, model = 'claude-opus-5-5') {
   await $.turn.start({ text, turnId: id })
   stepResult = stepUsage ?? null
-  for await (const _ of $.turn.step({ turnId: id, index: 0, model: 'claude-opus-5-5', messageCount: 3 } as never)) {
+  for await (const _ of $.turn.step({ turnId: id, index: 0, model, messageCount: 3 } as never)) {
     // nothing streams
   }
   await $.turn.complete({ answer: 'okay', durationMs: 900, isAborted: false, turnId: id, reason: 'answer', usage } as never)
@@ -465,6 +467,69 @@ test('a poke that finds the cache cold turns caffeine off; timing sets the TTL w
   expect(status).toContain('caffeine off')
   expect(status).toContain('The last poke found the cache cold.')
   expect(status).toContain('The cache last went cold before 10:08, after 48m idle.')
+})
+
+const SUMMARY = [{ role: 'user', text: 'the summary', toolUses: [] }]
+
+test('a compaction or a /clear holds the pokes until the next message, and its rewrite is not a cold poke', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  const submitted: string[] = []
+  world(on, submitted)
+  await $.session.start({ cwd: 'D:\work', surface: 'terminal', isInteractive: true })
+  const wrote = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 57_000, model: 'claude-opus-5-5' }
+  const read = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 57_000, cache_creation_input_tokens: 40, model: 'claude-opus-5-5' }
+
+  await run($, 'on')
+  await turn($, 't1', 'fix the tests')
+  await time.advance(10 * MIN)
+
+  // a precompute and a subagent's compaction leave the cache alone
+  await $.session.compact({ trigger: 'precompute', messages: SUMMARY } as never)
+  await $.session.compact({ trigger: 'auto', agentId: 'a1', messages: SUMMARY } as never)
+  expect((await run($, 'status')).text).toContain('poke at 09:48')
+
+  // /compact: no poke pays for the rewrite
+  await $.session.compact({ trigger: 'manual', messages: SUMMARY } as never)
+  expect((await run($, 'status')).text).toContain('waits for your next message after the compaction')
+  await time.advance(60 * MIN)
+  expect(submitted).toEqual([])
+
+  // the person's next message writes it, unremarked, and the pokes start again from there
+  await turn($, 't2', 'where were we', wrote, wrote)
+  await time.advance(48 * MIN + 5_000)
+  expect(submitted).toEqual(['poke, just say okay'])
+  await turn($, 'p1', 'poke, just say okay', read, read)
+  expect((await run($, 'status')).text).toContain('found the cache warm')
+
+  // /clear holds them the same way
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  expect((await run($, 'status')).text).toContain('waits for your next message after the /clear')
+  await time.advance(60 * MIN)
+  expect(submitted.length).toBe(1)
+})
+
+test('a poke that is the first request on another model writes the cache without turning caffeine off', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  const submitted: string[] = []
+  world(on, submitted)
+  await $.session.start({ cwd: 'D:\work', surface: 'terminal', isInteractive: true })
+  const wrote = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 57_000, model: 'claude-sonnet-5-5' }
+
+  await run($, 'on')
+  await turn($, 't1', 'fix the tests')
+  // /model while idle: no hook fires, so the poke is the first request on the new model
+  await time.advance(48 * MIN + 5_000)
+  expect(submitted.length).toBe(1)
+  await turn($, 'p1', 'poke, just say okay', wrote, wrote, 'claude-sonnet-5-5')
+  const status = (await run($, 'status')).text
+  expect(status).toContain('caffeine on')
+  expect(status).not.toContain('found the cache cold')
+  await time.advance(48 * MIN + 5_000)
+  expect(submitted.length).toBe(2)
 })
 
 test('the cup cools from 100F with steam to 40F without', () => {

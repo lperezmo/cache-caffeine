@@ -70,8 +70,11 @@ type Caffeine = Brew & {
   measuredTtl: number | null
   // what request timing says, for models caffeine has no price for
   timedTtl: number | null
-  // the next request follows a compaction, which rewrites the cache anyway
-  isAfterCompact: boolean
+  // what emptied the cache (a compaction, a /clear): pokes wait for the next request to write it again
+  heldBy: string
+  // the running poke was a first request, after a compaction or on another model,
+  // so it wrote the cache whatever the pokes before it did
+  isPokeExempt: boolean
   // the last time a request found the cache cold, and the gap before it
   coldAt: number
   coldGap: number
@@ -176,7 +179,8 @@ function describe(c: Caffeine, now: number): { text: string; color?: string; isD
     return { text: `caffeine paused · ${over.label} limit ${over.percent}%${tail}`, color: 'yellow' }
   }
   if (c.lastAt === 0) {
-    return { text: `caffeine on · waits for the first reply${tail}`, color: 'green' }
+    const why = c.heldBy ? `waits for your next message after the ${c.heldBy}` : 'waits for the first reply'
+    return { text: `caffeine on · ${why}${tail}`, color: 'green' }
   }
   if (c.isBusy || c.poke !== 'none') {
     return { text: `caffeine on · cache warm${tail}`, color: 'green' }
@@ -498,6 +502,13 @@ const help = [
   '/caffeine status       what it is doing',
 ].join('\n')
 
+async function hold($: EngineInterface, c: Caffeine, by: string): Promise<void> {
+  c.lastAt = 0
+  c.heldBy = by
+  await keep($, c)
+  await refresh($, c)
+}
+
 export const register: Register = on => {
   const c: Caffeine = {
     isOn: false,
@@ -521,7 +532,8 @@ export const register: Register = on => {
     envTtl: null,
     measuredTtl: null,
     timedTtl: null,
-    isAfterCompact: false,
+    heldBy: '',
+    isPokeExempt: false,
     coldAt: 0,
     coldGap: 0,
     message: DEFAULT_MESSAGE,
@@ -613,10 +625,12 @@ export const register: Register = on => {
     const at = await $.clock.now()
     const gap = c.lastAt ? at - c.lastAt : 0
     // a first request, a compaction or another model writes the cache whatever the TTL
-    const isExempt = c.lastAt === 0 || c.isAfterCompact || (c.model !== '' && c.model !== e.model)
+    // (a compaction and a /clear set lastAt back to 0)
+    const isExempt = c.lastAt === 0 || (c.model !== '' && c.model !== e.model)
+    if (isExempt && c.poke === 'running') c.isPokeExempt = true
     c.model = e.model
     c.lastAt = at
-    c.isAfterCompact = false
+    c.heldBy = ''
     void keep($, c)
     const before = await costNow($)
     const result = yield* next(e)
@@ -643,6 +657,7 @@ export const register: Register = on => {
     if (c.poke === 'sent' && e.text.includes(c.message)) {
       c.poke = 'running'
       c.pokeTurnId = e.turnId
+      c.isPokeExempt = false
     } else {
       c.activeAt = await $.clock.now()
     }
@@ -659,14 +674,17 @@ export const register: Register = on => {
           c.lastPoke = e.usage
           c.spent += equivalents(e.usage, e.usage.model || c.model, ttlOf(c))
         }
-        if (e.usage && pokeWasCold(e.usage)) {
+        const isExempt = c.isPokeExempt
+        c.isPokeExempt = false
+        // a poke that had to write the cache anyway says nothing about the pokes before it
+        if (e.usage && !isExempt && pokeWasCold(e.usage)) {
           c.lastWarm = false
           await switchOn($, c, false)
           tell(
             $,
             `turned off: its poke found the cache cold (it wrote ${sized(e.usage.cache_creation_input_tokens)} tokens again), so the pokes were not keeping it warm. /caffeine status says why it may be; turn it on again to retry.`,
           )
-        } else if (e.usage) {
+        } else if (e.usage && !isExempt) {
           c.lastWarm = true
         }
       }
@@ -683,10 +701,19 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // A compaction or a /clear empties the cache: nothing pokes until a request
+  // of the person's own (or the turn carrying on) has written it again.
   on('session.compact', async ($, e, next) => {
     const done = await next(e)
-    c.isAfterCompact = true
+    if (e.agentId === undefined && e.trigger !== 'precompute' && !('skip' in done && done.skip)) {
+      await hold($, c, 'compaction')
+    }
     return done
+  })
+
+  on('session.end', async ($, e, next) => {
+    if (e.reason === 'clear') await hold($, c, '/clear')
+    return next(e)
   })
 
   on('command.run', { command: 'caffeine' }, async ($, e) => {

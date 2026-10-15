@@ -67,8 +67,11 @@ type Caffeine = Brew & {
   // whose cost proves 1h; else Claude Code's automatic choice by plan
   ttl: number | null
   envTtl: number | null
-  // only ever 1h: a cost cannot tell a 5-minute write from a 1-hour one Claude Code priced as 5-minute
+  // only ever 1h: a cost cannot tell a 5-minute write from a 1-hour one Claude Code priced as 5-minute;
+  // cleared again by a cache found cold inside that hour, unless that request priced at 1h itself
   measuredTtl: number | null
+  // the running turn's last request priced at 1h: its cold cache was a prefix change, not an expiry
+  isPriced: boolean
   // what request timing says, for models caffeine has no price for
   timedTtl: number | null
   // what emptied the cache (a compaction, a /clear): pokes wait for the next request to write it again
@@ -105,14 +108,15 @@ const MINUTE = 60_000
 // `/caffeine warm` alone
 const WARM = 60 * MINUTE
 
-// a request priced as a 1-hour write is the truth; the environment and the plan are what Claude Code should pick
-const ttlOf = (c: Caffeine) => c.ttl ?? c.measuredTtl ?? c.envTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
+// the environment and the settings are what Claude Code reads before it picks by plan: a cost that
+// contradicts them is a misread; then a request priced as a 1-hour write, over the plan Claude Code should pick
+const ttlOf = (c: Caffeine) => c.ttl ?? c.envTtl ?? c.measuredTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
 
 // Where the TTL caffeine works with comes from, for /caffeine status.
 function ttlSource(c: Caffeine): string {
   if (c.ttl !== null) return 'set with /caffeine ttl'
-  if (c.measuredTtl !== null) return 'measured from what requests cost'
   if (c.envTtl !== null) return 'from the environment'
+  if (c.measuredTtl !== null) return 'measured from what requests cost'
   if (c.timedTtl !== null) return 'measured from request timing'
   if (c.limits.length) return 'the subscription default'
   return c.lastAt ? 'the API-key default' : 'a guess until the first reply shows the plan'
@@ -142,10 +146,18 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
   c.idle = (await setting($, 'idle', DEFAULT_IDLE)) || DEFAULT_IDLE
   c.ttl = (await setting($, 'ttl', null)) as number | null
   c.autoAt = await setting($, 'autoAt', 0)
+  // the merged settings, as Claude Code reads them; a read that fails leaves the key unset
+  let promptCacheTtl: unknown
+  try {
+    promptCacheTtl = (await $.settings.read()).promptCacheTtl
+  } catch {
+    promptCacheTtl = undefined
+  }
   try {
     c.envTtl = ttlFromEnv(
-      await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'),
       await $.env.get('FORCE_PROMPT_CACHING_5M'),
+      await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'),
+      promptCacheTtl,
       await $.env.get('ENABLE_PROMPT_CACHING_1H'),
     )
   } catch {
@@ -532,6 +544,7 @@ export const register: Register = on => {
     ttl: null,
     envTtl: null,
     measuredTtl: null,
+    isPriced: false,
     timedTtl: null,
     heldBy: '',
     isPokeExempt: false,
@@ -618,13 +631,17 @@ export const register: Register = on => {
   })
 
   // Each main-thread request reads the cached prompt and starts its TTL again.
-  // What it cost can prove it was written at 1h.
+  // What it cost can prove it was written at 1h; a cache found cold inside
+  // the TTL caffeine was working with takes that proof back, unless the
+  // request that wrote it again priced at 1h itself: then the prefix changed
+  // (a tool list, an MCP reconnect, a resume), the cache did not expire.
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) {
       return yield* next(e)
     }
     const at = await $.clock.now()
     const gap = c.lastAt ? at - c.lastAt : 0
+    const believed = ttlOf(c)
     // a first request, a compaction or another model writes the cache whatever the TTL
     // (a compaction and a /clear set lastAt back to 0)
     const isExempt = c.lastAt === 0 || (c.model !== '' && c.model !== e.model)
@@ -638,17 +655,21 @@ export const register: Register = on => {
     const after = await costNow($)
     if (result.usage) {
       const priced = before !== null && after !== null ? ttlFromCost(after - before, result.usage, result.usage.model || e.model) : null
+      c.isPriced = priced !== null
       if (priced !== null) c.measuredTtl = priced
       const timing = readTiming(gap, result.usage, isExempt)
-      if (timing.ttl !== null) c.timedTtl = timing.ttl
+      // a rewrite priced at 1h was no expiry, so it says nothing about a 5-minute TTL
+      if (timing.ttl !== null && !(timing.isCold && priced !== null)) c.timedTtl = timing.ttl
       if (timing.isCold) {
         c.coldAt = at
         c.coldGap = gap
+        // cold before the TTL ran out with no 1h reading of its own: whatever a cost said before, the cache was not written at 1h
+        if (gap < believed && priced === null) c.measuredTtl = null
         if (c.isOn && c.poke !== 'running') {
           tell($, `the cache had gone cold after ${span(gap)} idle; this request wrote it again.`)
         }
       }
-      if (priced !== null || timing.ttl !== null) void refresh($, c)
+      if (priced !== null || timing.ttl !== null || timing.isCold) void refresh($, c)
     }
     return result
   })
@@ -680,6 +701,8 @@ export const register: Register = on => {
         // a poke that had to write the cache anyway says nothing about the pokes before it
         if (e.usage && !isExempt && pokeWasCold(e.usage)) {
           c.lastWarm = false
+          // the poke went out inside the TTL, so a cold cache says it was not 1h, unless the poke's own cost says it was
+          if (!c.isPriced) c.measuredTtl = null
           await switchOn($, c, false)
           tell(
             $,

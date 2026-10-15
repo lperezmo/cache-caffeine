@@ -52,25 +52,42 @@ test('durations, times and the cadence', () => {
   expect(span(45_000)).toBe('45s')
   expect(defaultEvery(TTL_1H)).toBe(48 * MIN)
   expect(defaultEvery(TTL_5M)).toBe(4 * MIN)
-  expect(ttlFromEnv(undefined, undefined, '1')).toBe(TTL_1H)
-  expect(ttlFromEnv(undefined, '1', '1')).toBe(TTL_5M)
-  expect(ttlFromEnv('1h', '1', undefined)).toBe(TTL_1H)
-  expect(ttlFromEnv('5m', undefined, '1')).toBe(TTL_5M)
-  expect(ttlFromEnv(undefined, undefined, undefined)).toBeNull()
-  expect(ttlFromEnv(undefined, undefined, '0')).toBeNull()
+  // in Claude Code's order: FORCE_5M, then CLAUDE_CODE_PROMPT_CACHE_TTL, then the promptCacheTtl setting, then ENABLE_1H
+  expect(ttlFromEnv(undefined, undefined, undefined, '1')).toBe(TTL_1H)
+  expect(ttlFromEnv('1', undefined, undefined, '1')).toBe(TTL_5M)
+  expect(ttlFromEnv('1', '1h', '1h', undefined)).toBe(TTL_5M)
+  expect(ttlFromEnv(undefined, '1h', '5m', undefined)).toBe(TTL_1H)
+  expect(ttlFromEnv(undefined, '5m', '1h', '1')).toBe(TTL_5M)
+  expect(ttlFromEnv(undefined, undefined, '5m', '1')).toBe(TTL_5M)
+  expect(ttlFromEnv(undefined, undefined, '1h', undefined)).toBe(TTL_1H)
+  expect(ttlFromEnv(undefined, undefined, 42, undefined)).toBeNull()
+  expect(ttlFromEnv(undefined, undefined, undefined, undefined)).toBeNull()
+  expect(ttlFromEnv(undefined, undefined, undefined, '0')).toBeNull()
   expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 19 }])).toBe(TTL_1H)
   expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 100 }])).toBe(TTL_5M)
   expect(ttlByPlan([])).toBe(TTL_5M)
-  // two real Haiku requests, as Claude Code priced them (1h writes)
+  // two Haiku requests priced as 1h writes (2x), large enough that a web search's $0.01 cannot have put them there
   const haiku = 'claude-haiku-4-5-20251001'
-  expect(ttlFromCost(0.013878, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, haiku)).toBe(TTL_1H)
-  expect(ttlFromCost(0.0202628, { input_tokens: 10, output_tokens: 74, cache_read_input_tokens: 26348, cache_creation_input_tokens: 8624 }, haiku)).toBe(TTL_1H)
+  expect(ttlFromCost(0.242322, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, haiku)).toBe(TTL_1H)
+  expect(ttlFromCost(0.303015, { input_tokens: 10, output_tokens: 74, cache_read_input_tokens: 26348, cache_creation_input_tokens: 150_000 }, haiku)).toBe(TTL_1H)
   // a write priced at 1.25x is a 5m one, or a 1h one Claude Code priced at the 5m rate: it proves nothing
-  expect(ttlFromCost(0.009781, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 6011 }, haiku)).toBeNull()
+  expect(ttlFromCost(0.152267, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, haiku)).toBeNull()
+  // a real Haiku request priced at 2x, but a 5.8k write: one web search moves its rate by 1.7, so it proves nothing
+  expect(ttlFromCost(0.013878, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, haiku)).toBeNull()
   // too little written to tell, an unknown price, a subagent's cost mixed in
   expect(ttlFromCost(0.002, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 200 }, haiku)).toBeNull()
-  expect(ttlFromCost(0.0138, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, 'other')).toBeNull()
-  expect(ttlFromCost(0.05, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, haiku)).toBeNull()
+  expect(ttlFromCost(0.2423, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, 'other')).toBeNull()
+  expect(ttlFromCost(0.3, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, haiku)).toBeNull()
+  // a request served in the US costs x1.1, which the hook never sees (it gets no inference_geo): a 1h write
+  // (0.2510, or 0.2761 in the US) proves 1h either way, a 5m one (0.1610, or 0.1771 in the US) proves nothing
+  const sonnet = 'claude-sonnet-5-5'
+  const us = { input_tokens: 10, output_tokens: 300, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 60_000 }
+  expect(ttlFromCost(0.25102, us, sonnet)).toBe(TTL_1H)
+  expect(ttlFromCost(0.276122, us, sonnet)).toBe(TTL_1H)
+  expect(ttlFromCost(0.16102, us, sonnet)).toBeNull()
+  expect(ttlFromCost(0.177122, us, sonnet)).toBeNull()
+  // a write small against the read says nothing, even priced at 2x: the x1.1 on the read alone could put it there
+  expect(ttlFromCost(0.104, { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 3000 }, 'claude-opus-5-5')).toBeNull()
   expect(nextPokeAt(0, MIN)).toBeNull()
   expect(nextPokeAt(1000, MIN)).toBe(1000 + MIN)
   expect(wasWarm({ cache_read_input_tokens: 90_000, cache_creation_input_tokens: 200 })).toBe(true)
@@ -467,8 +484,113 @@ test('a cost priced at the 5m rate leaves the subscription at 1h; one priced at 
 
   // a write priced at 2x proves 1h, whatever the plan says
   await run($, 'off')
-  await request('t2', 0.013878, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 })
+  await request('t2', 0.290265, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 500_000, cache_creation_input_tokens: 120_000 })
   expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
+})
+
+// A session on Haiku with a 1h reading in hand (a 120k write priced at 2x), 20 minutes before the next request.
+async function measured1h($: Engine, on: On, time: ReturnType<typeof mock.clock>, submitted: string[]) {
+  mock.store(on)
+  mock.env(on, {})
+  world(on, submitted)
+  sessionCost = 0
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  await $.session.measure({
+    changed: ['rateLimits'],
+    context: { tokens: 30_000, max: 200_000, percent: 15 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 3, resetsAt: new Date(at(13, 0)).toISOString() }],
+  } as never)
+  const haiku = 'claude-haiku-4-5-20251001'
+  const request = async (id: string, text: string, cost: number, usage: object) => {
+    stepCost = cost
+    await turn($, id, text, { ...usage, model: haiku }, { ...usage, model: haiku }, haiku)
+  }
+  await request('t1', 'work', 0.242322, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 })
+  expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
+  await time.advance(20 * MIN)
+  return request
+}
+
+test('a turn of your own that finds the cache cold inside the hour, with no 1h reading of its own, takes the reading back', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  const request = await measured1h($, on, time, [])
+  // the request wrote the cache again 20 minutes in, priced at nothing caffeine can read: timing's 5m stands
+  await request('t2', 'more', 0, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 89_000 })
+  const status = (await run($, 'status')).text
+  expect(status).toContain('Cache TTL 5m (measured from request timing)')
+  expect(status).not.toContain('measured from what requests cost')
+})
+
+test('a turn of your own that writes the cache again inside the hour at the 1h rate keeps the reading: the prefix changed, the cache did not expire', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  const request = await measured1h($, on, time, [])
+  // an MCP reconnect changed the prefix: the rewrite is priced at 2x again (0.240125), so 1h holds and timing's 5m is not taken
+  await request('t2', 'more', 0.240125, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 120_000 })
+  expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
+})
+
+test('a cost read as 1h by chance is taken back by a cache found cold inside the hour; the pokes go back to 4 minutes', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, {})
+  const submitted: string[] = []
+  world(on, submitted)
+  sessionCost = 0
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  await $.session.measure({
+    changed: ['rateLimits'],
+    context: { tokens: 30_000, max: 200_000, percent: 15 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 3, resetsAt: new Date(at(13, 0)).toISOString() }],
+  } as never)
+  const haiku = 'claude-haiku-4-5-20251001'
+  const request = async (id: string, text: string, cost: number, usage: object) => {
+    stepCost = cost
+    await turn($, id, text, { ...usage, model: haiku }, { ...usage, model: haiku }, haiku)
+  }
+
+  // a 5m write (0.139767) plus a subagent's $0.0825 landing in the same delta (which the hook cannot tell apart) reads as a 1h write
+  await request('t1', 'work', 0.222267, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 110_000 })
+  expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
+  await run($, 'on')
+  await time.advance(48 * MIN + 5_000)
+  expect(submitted.length).toBe(1)
+
+  // the poke finds the cache cold 48 minutes in: the reading is gone, timing says 5m, and caffeine is off
+  await request('p1', 'poke, just say okay', 0, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 89_000 })
+  const status = (await run($, 'status')).text
+  expect(status).toContain('caffeine off')
+  expect(status).toContain('Cache TTL 5m (measured from request timing)')
+  expect(status).not.toContain('measured from what requests cost')
+
+  // on again: the next request's poke comes 4 minutes after it
+  await run($, 'on')
+  await request('t2', 'back', 0, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 40 })
+  await time.advance(4 * MIN + 5_000)
+  expect(submitted.length).toBe(2)
+})
+
+test('the environment outranks what a cost says: Claude Code reads it before anything else', async ($, on) => {
+  mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, { FORCE_PROMPT_CACHING_5M: '1' })
+  world(on, [])
+  sessionCost = 0
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  const haiku = 'claude-haiku-4-5-20251001'
+  stepCost = 0.242322
+  await turn($, 't1', 'work', undefined, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000, model: haiku }, haiku)
+  expect((await run($, 'status')).text).toContain('Cache TTL 5m (from the environment)')
+  expect((await run($, 'on')).text).toContain('poking 4m after the last request (5m cache)')
+})
+
+test('the promptCacheTtl setting counts as the environment does, under CLAUDE_CODE_PROMPT_CACHE_TTL', async ($, on) => {
+  mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  on('settings.read', () => ({ value: { promptCacheTtl: '5m' } }) as never)
+  world(on, [])
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  expect((await run($, 'status')).text).toContain('Cache TTL 5m (from the environment)')
 })
 
 test('timing: a read after 5.5 minutes proves 1h, a rewrite under an hour means 5m, exempt after a compaction', () => {

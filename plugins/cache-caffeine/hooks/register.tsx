@@ -63,10 +63,11 @@ type Caffeine = Brew & {
   limits: Limit[]
   context: number
   model: string
-  // the TTL: the person's override, Claude Code's environment, and what the
-  // session's own requests cost; else Claude Code's automatic choice by plan
+  // the TTL: the person's override, Claude Code's environment, and a request
+  // whose cost proves 1h; else Claude Code's automatic choice by plan
   ttl: number | null
   envTtl: number | null
+  // only ever 1h: a cost cannot tell a 5-minute write from a 1-hour one Claude Code priced as 5-minute
   measuredTtl: number | null
   // what request timing says, for models caffeine has no price for
   timedTtl: number | null
@@ -104,7 +105,7 @@ const MINUTE = 60_000
 // `/caffeine warm` alone
 const WARM = 60 * MINUTE
 
-// what the requests cost is the truth; the environment and the plan are what Claude Code should pick
+// a request priced as a 1-hour write is the truth; the environment and the plan are what Claude Code should pick
 const ttlOf = (c: Caffeine) => c.ttl ?? c.measuredTtl ?? c.envTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
 
 // Where the TTL caffeine works with comes from, for /caffeine status.
@@ -617,7 +618,7 @@ export const register: Register = on => {
   })
 
   // Each main-thread request reads the cached prompt and starts its TTL again.
-  // What it cost says which TTL it was written at.
+  // What it cost can prove it was written at 1h.
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) {
       return yield* next(e)

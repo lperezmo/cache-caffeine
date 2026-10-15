@@ -65,7 +65,8 @@ test('durations, times and the cadence', () => {
   const haiku = 'claude-haiku-4-5-20251001'
   expect(ttlFromCost(0.013878, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, haiku)).toBe(TTL_1H)
   expect(ttlFromCost(0.0202628, { input_tokens: 10, output_tokens: 74, cache_read_input_tokens: 26348, cache_creation_input_tokens: 8624 }, haiku)).toBe(TTL_1H)
-  expect(ttlFromCost(0.009781, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 6011 }, haiku)).toBe(TTL_5M)
+  // a write priced at 1.25x is a 5m one, or a 1h one Claude Code priced at the 5m rate: it proves nothing
+  expect(ttlFromCost(0.009781, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 6011 }, haiku)).toBeNull()
   // too little written to tell, an unknown price, a subagent's cost mixed in
   expect(ttlFromCost(0.002, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 200 }, haiku)).toBeNull()
   expect(ttlFromCost(0.0138, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, 'other')).toBeNull()
@@ -82,6 +83,9 @@ test('durations, times and the cadence', () => {
 
 // What the next request's response reports, for the turn.step stand-in.
 let stepResult: object | null = null
+// Claude Code's running cost estimate, when a test gives one: each request raises it by `stepCost`
+let sessionCost: number | undefined
+let stepCost = 0
 
 // The engine beneath caffeine: the UI ops, the prompts it submits, the turns.
 function world(on: On, submitted: string[], crons: { cron: string; prompt: string }[] = [], pushed: string[] = []) {
@@ -105,7 +109,9 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('ui.focus', () => ({}))
   on('command.register', () => ({ value: undefined }) as never)
   on('session.start', ($, e) => ({ cwd: e.cwd }))
-  on('session.usage', () => ({ value: { rateLimits: [] } }) as never)
+  sessionCost = undefined
+  stepCost = 0
+  on('session.usage', () => ({ value: { rateLimits: [], ...(sessionCost === undefined ? {} : { cost: { usd: sessionCost } }) } }) as never)
   on('session.measure', ($, e) => ({ changed: e.changed }) as never)
   on('prompt.submit', ($, e) => {
     submitted.push(e.text)
@@ -116,6 +122,7 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }))
   on('turn.step', async function* ($, e) {
+    if (sessionCost !== undefined) sessionCost += stepCost
     return { turnId: e.turnId, index: e.index, answer: 'okay', toolUses: [], stopReason: 'end_turn', usage: stepResult } as never
   })
   // what another mod (clawd-buddy) or the engine draws in the band beneath caffeine
@@ -428,6 +435,40 @@ test('auto turns it on past the context size, once; away 1h; cost reads the sess
   expect((await run($, 'warm')).text).toBe('Caffeine on, keeping the cache warm until 10:00.')
   expect((await run($, 'warm 30m')).text).toBe('Caffeine on, keeping the cache warm until 09:30.')
   expect((await run($, 'status')).text).toContain('until 09:30 (30m left)')
+})
+
+test('a cost priced at the 5m rate leaves the subscription at 1h; one priced at the 1h rate proves it', async ($, on) => {
+  const time = mock.clock(on, { now: at(9, 0) })
+  mock.store(on)
+  mock.env(on, {})
+  const submitted: string[] = []
+  world(on, submitted)
+  sessionCost = 0
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  await $.session.measure({
+    changed: ['rateLimits'],
+    context: { tokens: 30_000, max: 200_000, percent: 15 },
+    rateLimits: [{ kind: 'five_hour', percentUsed: 3, resetsAt: new Date(at(13, 0)).toISOString() }],
+  } as never)
+  const haiku = 'claude-haiku-4-5-20251001'
+  const request = async (id: string, cost: number, usage: object) => {
+    stepCost = cost
+    await turn($, id, 'work', undefined, { ...usage, model: haiku }, haiku)
+  }
+
+  // the write priced at 1.25x: the cost cannot tell, so the subscription's 1h stands
+  await request('t1', 0.009781, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 6011 })
+  expect((await run($, 'status')).text).toContain('Cache TTL 1h (the subscription default)')
+  await run($, 'on')
+  await time.advance(4 * MIN + 5_000)
+  expect(submitted.length).toBe(0)
+  await time.advance(44 * MIN)
+  expect(submitted.length).toBe(1)
+
+  // a write priced at 2x proves 1h, whatever the plan says
+  await run($, 'off')
+  await request('t2', 0.013878, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 })
+  expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
 })
 
 test('timing: a read after 5.5 minutes proves 1h, a rewrite under an hour means 5m, exempt after a compaction', () => {

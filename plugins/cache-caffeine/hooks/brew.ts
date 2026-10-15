@@ -60,11 +60,15 @@ export function ttlByPlan(limits: readonly Limit[]): number {
   return limits.length > 0 && limits.every(l => l.percentUsed < 100) ? TTL_1H : TTL_5M
 }
 
-// The TTL one request was written at, read off what it cost: the session's
-// cost went up by `delta` dollars for `u`, and only the cache write's rate is
-// unknown (2x for 1h, 1.25x for 5m). Null when the request wrote too little
-// to tell, the model's price is unknown, or the rate fits neither (another
-// request, a subagent's, landed in between).
+// The 1-hour TTL, when one request's cost proves it: the session's cost went
+// up by `delta` dollars for `u`, and only the cache write's rate is unknown.
+// The cost is Claude Code's estimate, not the bill, and it prices a 1-hour
+// write at 2x only when its price table has a 1-hour rate for the model; else
+// it prices every write at the 5-minute 1.25x. So 2x proves 1h, and 1.25x
+// proves nothing: it is a 5-minute write, or a 1-hour one priced as 5-minute.
+// Null when the request wrote too little to tell, the model's price is
+// unknown, or the rate is not 2x (1.25x, or another request, a subagent's,
+// landed in between).
 export function ttlFromCost(delta: number, u: Usage, model: string): number | null {
   const price = inputPrice(model)
   if (price === null || u.cache_creation_input_tokens < 1000 || !(delta > 0)) {
@@ -72,9 +76,7 @@ export function ttlFromCost(delta: number, u: Usage, model: string): number | nu
   }
   const rest = u.input_tokens + u.output_tokens * 5 + u.cache_read_input_tokens * readRate(model)
   const rate = ((delta * 1e6) / price - rest) / u.cache_creation_input_tokens
-  if (Math.abs(rate - 2) < 0.1) return TTL_1H
-  if (Math.abs(rate - 1.25) < 0.1) return TTL_5M
-  return null
+  return Math.abs(rate - 2) < 0.1 ? TTL_1H : null
 }
 
 // When the next poke goes out, given the last request, or null with none yet.

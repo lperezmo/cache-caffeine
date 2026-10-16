@@ -50,7 +50,7 @@ type KeptWake = { session: string; at: number; label: string; text?: string }
 type Caffeine = Brew & {
   // a main-thread turn is running; its own requests keep the cache warm
   isBusy: boolean
-  // a poke submitted and waiting for its turn, then running in it
+  // a poke submitted, then running in its own turn
   poke: 'none' | 'sent' | 'running'
   pokeTurnId: string
   sentAt: number
@@ -63,21 +63,21 @@ type Caffeine = Brew & {
   limits: Limit[]
   context: number
   model: string
-  // the TTL: the person's override, Claude Code's environment, and a request
-  // whose cost proves 1h; else Claude Code's automatic choice by plan
+  // the TTL sources, in ttlOf's order: the person's override, the environment, a 1h cost
+  // reading, request timing; else Claude Code's choice by plan
   ttl: number | null
   envTtl: number | null
-  // only ever 1h: a cost cannot tell a 5-minute write from a 1-hour one Claude Code priced as 5-minute;
-  // cleared again by a cache found cold inside that hour, unless that request priced at 1h itself
+  // only ever 1h (a 1.25x cost cannot tell 5m from 1h); cleared by a cache found cold
+  // inside the hour, unless that request priced at 1h itself
   measuredTtl: number | null
   // the running turn's last request priced at 1h: its cold cache was a prefix change, not an expiry
   isPriced: boolean
   // what request timing says, for models caffeine has no price for
   timedTtl: number | null
-  // what emptied the cache (a compaction, a /clear): pokes wait for the next request to write it again
+  // what emptied the cache (compaction, /clear); pokes wait for the next request to rewrite it
   heldBy: string
-  // the running poke was a first request, after a compaction or on another model,
-  // so it wrote the cache whatever the pokes before it did
+  // the running poke was a first request (after a compaction or on another model),
+  // so its write says nothing about the pokes before it
   isPokeExempt: boolean
   // the last time a request found the cache cold, and the gap before it
   coldAt: number
@@ -108,11 +108,11 @@ const MINUTE = 60_000
 // `/caffeine warm` alone
 const WARM = 60 * MINUTE
 
-// the environment and the settings are what Claude Code reads before it picks by plan: a cost that
-// contradicts them is a misread; then a request priced as a 1-hour write, over the plan Claude Code should pick
+// env and settings first (Claude Code reads them before picking by plan, so a cost that
+// contradicts them is a misread), then a 1h-priced request, then timing, then the plan
 const ttlOf = (c: Caffeine) => c.ttl ?? c.envTtl ?? c.measuredTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
 
-// Where the TTL caffeine works with comes from, for /caffeine status.
+// Where the TTL comes from, for /caffeine status.
 function ttlSource(c: Caffeine): string {
   if (c.ttl !== null) return 'set with /caffeine ttl'
   if (c.envTtl !== null) return 'from the environment'
@@ -146,7 +146,7 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
   c.idle = (await setting($, 'idle', DEFAULT_IDLE)) || DEFAULT_IDLE
   c.ttl = (await setting($, 'ttl', null)) as number | null
   c.autoAt = await setting($, 'autoAt', 0)
-  // the merged settings, as Claude Code reads them; a read that fails leaves the key unset
+  // merged settings, as Claude Code reads them; a failed read leaves the key unset
   let promptCacheTtl: unknown
   try {
     promptCacheTtl = (await $.settings.read()).promptCacheTtl
@@ -170,7 +170,7 @@ async function keep($: EngineInterface, c: Caffeine): Promise<void> {
   await update($, brew, () => kept).catch(() => undefined)
 }
 
-// How long caffeine keeps the cache warm: to a set time, or until it is turned off.
+// How long caffeine stays on: to a set time, or until turned off.
 function howLong(c: Caffeine, now: number): string {
   if (c.until) {
     return `until ${clock(c.until, now)} (${span(c.until - now)} left)`
@@ -272,11 +272,11 @@ async function tick($: EngineInterface, c: Caffeine): Promise<void> {
     return
   }
   if (c.poke !== 'none') {
-    // a poke that never got its turn (a dialog, a closed prompt) stops holding the rest up
+    // a poke that never got its turn (a dialog, a closed prompt) stops blocking the rest
     if (c.poke === 'sent' && now - c.sentAt > 10 * MINUTE) c.poke = 'none'
     return
   }
-  // a cold cache gains nothing from a poke: it would only be written again
+  // a poke into a cold cache would only write it again
   if (c.isBusy || c.lastAt === 0 || overLine(c.limits) || now - c.lastAt >= ttlOf(c)) {
     return
   }
@@ -327,9 +327,9 @@ function costLines(c: Caffeine): string[] {
   ].filter(Boolean)
 }
 
-// The wake: caffeine's own timer, which submits the wake prompt at a set
-// time (once the session is idle), the same way a poke goes out. The store
-// keeps it under the session's id, so `--resume` picks it up again.
+// The wake: caffeine's own timer submits the wake prompt at a set time (once
+// the session is idle), like a poke. Stored under the session id, so
+// `--resume` picks it up again.
 
 async function arm($: EngineInterface, c: Caffeine, at: number, label: string, text = ''): Promise<void> {
   await disarm($, c)
@@ -366,8 +366,8 @@ async function sessionKey($: EngineInterface): Promise<string> {
   }
 }
 
-// What Claude is told on this wake: its own text, else the wake prompt you
-// set, else the default for its kind (after a limit reset, or at a time).
+// What Claude is told: the wake's own text, else the set wake prompt, else the
+// default for its kind (after a limit reset, or at a time).
 async function wakeText($: EngineInterface, armed: Armed): Promise<string> {
   const mine = (await setting($, 'wakePrompt', null)) as string | null
   return armed.text || mine || (armed.label ? DEFAULT_WAKE : DEFAULT_TIMER_WAKE)
@@ -383,8 +383,7 @@ async function fire($: EngineInterface, c: Caffeine, armed: Armed): Promise<void
   void $.prompt.submit({ text: prompt }).catch(() => undefined)
 }
 
-// After `--resume` (or a reload of the mod) the wake this session booked is
-// still ahead: take it back.
+// After `--resume` or a mod reload, take back this session's wake if still ahead.
 async function adopt($: EngineInterface, c: Caffeine): Promise<void> {
   try {
     const kept = (await $.store.get('wake')) as KeptWake | null | undefined
@@ -402,7 +401,7 @@ async function adopt($: EngineInterface, c: Caffeine): Promise<void> {
   }
 }
 
-// The wake at the reset of whatever window is in the way.
+// Books the wake at the reset of the window in the way.
 async function armAtReset($: EngineInterface, c: Caffeine): Promise<void> {
   const block = blocking(c.limits)
   if (!block) {
@@ -466,15 +465,15 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
 const FOREVER = 'Yes, no end'
 const KEEP_STOP = 'Keep the idle stop'
 
-// No end at all, but only once the person has said so: the dialog spells out
-// what it costs, and a run with no one to ask takes a trailing "yes" instead.
+// No end, but only once confirmed: the dialog spells out the cost; with no one
+// to ask, a trailing "yes" confirms.
 async function forever($: EngineInterface, c: Caffeine, isSure: boolean): Promise<{ text: string }> {
   const perDay = Math.round((24 * 60 * MINUTE) / everyOf(c))
   if (!isSure) {
     let answer: string
     try {
       answer = await $.ui.ask(
-        `Keep the cache warm with no end, this time? Caffeine will poke ${span(everyOf(c))} after the last request until you turn it off, about ${perDay} pokes a day while you are away, and each one uses your plan's usage. Once you turn it off, the idle stop is back.`,
+        `Keep the cache warm with no end this time? Caffeine pokes ${span(everyOf(c))} after the last request until you turn it off: about ${perDay} pokes a day while you are away, each using your plan's usage. Turning it off brings the idle stop back.`,
         { header: 'caffeine', options: [FOREVER, KEEP_STOP] },
       )
     } catch {
@@ -490,7 +489,7 @@ async function forever($: EngineInterface, c: Caffeine, isSure: boolean): Promis
   c.isForever = true
   await keep($, c)
   await refresh($, c)
-  return { text: `Caffeine on with no end: it keeps the cache warm until you turn it off. The next time you turn it on, the ${span(c.idle)} idle stop is back.` }
+  return { text: `Caffeine on with no end, until you turn it off. Next time you turn it on, the ${span(c.idle)} idle stop is back.` }
 }
 
 const help = [
@@ -504,7 +503,7 @@ const help = [
   '/caffeine cost         what the pokes cost against one cache rewrite',
   '/caffeine every 10m    poke this long after the last request (alone: back to auto)',
   '/caffeine ttl 1h|5m    pin the cache TTL (auto: back to detecting it)',
-  '/caffeine forever      on with no end this time, once you confirm (also: idle off); off brings the idle stop back',
+  '/caffeine forever      on with no end this time, once confirmed (also: idle off); off restores the idle stop',
   '/caffeine idle 8h      turn off after this long without a turn of your own',
   '/caffeine band on|off  the row above the prompt; off moves it to the status line',
   '/caffeine wake         wake Claude just after the usage limit resets',
@@ -631,11 +630,10 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // Each main-thread request reads the cached prompt and starts its TTL again.
-  // What it cost can prove it was written at 1h; a cache found cold inside
-  // the TTL caffeine was working with takes that proof back, unless the
-  // request that wrote it again priced at 1h itself: then the prefix changed
-  // (a tool list, an MCP reconnect, a resume), the cache did not expire.
+  // Each main-thread request reads the cache and restarts its TTL. Its cost can
+  // prove a 1h write; a cache found cold inside the believed TTL takes that
+  // back, unless the rewrite priced at 1h itself: then the prefix changed (a
+  // tool list, an MCP reconnect, a resume), the cache did not expire.
   on('turn.step', async function* ($, e, next) {
     if (e.agentId !== undefined) {
       return yield* next(e)
@@ -643,8 +641,8 @@ export const register: Register = on => {
     const at = await $.clock.now()
     const gap = c.lastAt ? at - c.lastAt : 0
     const believed = ttlOf(c)
-    // a first request, a compaction or another model writes the cache whatever the TTL
-    // (a compaction and a /clear set lastAt back to 0)
+    // a first request (lastAt is 0 after a compaction or /clear) or another model
+    // writes the cache whatever the TTL
     const isExempt = c.lastAt === 0 || (c.model !== '' && c.model !== e.model)
     if (isExempt && c.poke === 'running') c.isPokeExempt = true
     c.model = e.model
@@ -659,12 +657,12 @@ export const register: Register = on => {
       c.isPriced = priced !== null
       if (priced !== null) c.measuredTtl = priced
       const timing = readTiming(gap, result.usage, isExempt)
-      // a rewrite priced at 1h was no expiry, so it says nothing about a 5-minute TTL
+      // a rewrite priced at 1h was no expiry, so it says nothing about a 5m TTL
       if (timing.ttl !== null && !(timing.isCold && priced !== null)) c.timedTtl = timing.ttl
       if (timing.isCold) {
         c.coldAt = at
         c.coldGap = gap
-        // cold before the TTL ran out with no 1h reading of its own: whatever a cost said before, the cache was not written at 1h
+        // cold inside the believed TTL with no 1h reading of its own: an earlier 1h reading was wrong
         if (gap < believed && priced === null) c.measuredTtl = null
         if (c.isOn && c.poke !== 'running') {
           tell($, `the cache had gone cold after ${span(gap)} idle; this request wrote it again.`)
@@ -702,12 +700,12 @@ export const register: Register = on => {
         // a poke that had to write the cache anyway says nothing about the pokes before it
         if (e.usage && !isExempt && pokeWasCold(e.usage)) {
           c.lastWarm = false
-          // the poke went out inside the TTL, so a cold cache says it was not 1h, unless the poke's own cost says it was
+          // a poke inside the TTL found it cold: not 1h, unless the poke's own cost says so
           if (!c.isPriced) c.measuredTtl = null
           await switchOn($, c, false)
           tell(
             $,
-            `turned off: its poke found the cache cold (it wrote ${sized(e.usage.cache_creation_input_tokens)} tokens again), so the pokes were not keeping it warm. /caffeine status says why it may be; turn it on again to retry.`,
+            `turned off: its poke found the cache cold (rewrote ${sized(e.usage.cache_creation_input_tokens)} tokens), so pokes were not keeping it warm. /caffeine status may say why; turn it on again to retry.`,
           )
         } else if (e.usage && !isExempt) {
           c.lastWarm = true
@@ -726,8 +724,8 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // A compaction or a /clear empties the cache: nothing pokes until a request
-  // of the person's own (or the turn carrying on) has written it again.
+  // A compaction or /clear empties the cache: no pokes until the person's next
+  // request (or the turn carrying on) writes it again.
   on('session.compact', async ($, e, next) => {
     const done = await next(e)
     if (e.agentId === undefined && e.trigger !== 'precompute' && !('skip' in done && done.skip)) {

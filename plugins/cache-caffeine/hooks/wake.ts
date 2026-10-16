@@ -1,5 +1,5 @@
-// Pure parts of the wake (what was wakey): which usage window is in the way,
-// when to wake, and what Claude is told then.
+// Pure parts of the wake (formerly wakey): the window in the way, when to
+// wake, and what Claude is told.
 
 import { parseClock, parseDuration } from './brew'
 import type { Limit } from './brew'
@@ -12,9 +12,9 @@ const LABELS: Record<string, string> = { five_hour: '5h', seven_day: 'weekly' }
 // The wake row shows from here: close enough to the line to plan a wake.
 export const NEAR = { five_hour: 90, seven_day: 95 } as const
 
-// Every wake prompt starts with this, so it reads as caffeine's in the transcript.
+// Prefix on every wake prompt, so the transcript shows it as caffeine's.
 export const MARK = '[caffeine]'
-// What Claude is told on waking: after a limit reset, or at a time picked.
+// What Claude is told on waking: after a limit reset, or at a set time.
 export const DEFAULT_WAKE = 'The usage limit has reset. Pick up where you left off.'
 export const DEFAULT_TIMER_WAKE = "Time's up. Pick up where you left off."
 
@@ -61,9 +61,9 @@ export function parseWhen(text: string, now: number): number | null {
   return ms !== null ? now + ms : parseClock(text, now)
 }
 
-// A wake time and what to say then: `20 min check the build` is 20 minutes
-// from now, saying "check the build". The longest run of leading words that
-// reads as a time is the time; the rest (maybe nothing) is the text.
+// A wake time and what to say: `20 min check the build` is 20 minutes from
+// now, saying "check the build". The longest leading run of words that reads
+// as a time is the time; the rest (maybe nothing) is the text.
 export function parseWake(text: string, now: number): { at: number; text: string } | null {
   const words = text.trim().split(/\s+/).filter(Boolean)
   for (let k = words.length; k > 0; k--) {

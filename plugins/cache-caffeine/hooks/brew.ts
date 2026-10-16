@@ -1,6 +1,5 @@
-// Pure parts of caffeine: how long the cache lives, when the next poke is
-// due, the durations and times it reads and writes, and the usage line it
-// will not cross.
+// Pure parts of caffeine: the cache TTL, when the next poke is due, the
+// durations and times it parses and prints, and the usage lines it will not cross.
 
 export type Limit = { kind: string; percentUsed: number; resetsAt?: string }
 
@@ -13,23 +12,22 @@ const hour = 60 * minute
 export const TTL_5M = 5 * minute
 export const TTL_1H = hour
 
-// How long after the last request a poke goes out, unless set: at 80% of the
-// TTL (48m of 1h, 4m of 5m). Each poke starts the TTL again, so one poke per
-// lifetime, late in it, is all the cache needs; the rest is margin.
+// The default poke delay after the last request: 80% of the TTL (48m of 1h,
+// 4m of 5m). Each poke restarts the TTL, so one late poke per lifetime is enough.
 export const POKE_AT = 0.8
 
 export function defaultEvery(ttl: number): number {
   return Math.round(ttl * POKE_AT)
 }
 
-// Turned off by itself after this long without a turn that was not a poke.
+// Turns itself off after this long with no turn but pokes.
 export const DEFAULT_IDLE = 8 * hour
 
 // Pokes stop at these usage lines: the window is better spent on work.
 export const LIMIT_LINE = { five_hour: 90, seven_day: 95 } as const
 const LABELS: Record<string, string> = { five_hour: '5h', seven_day: 'weekly' }
 
-// The window over its line, if one is: `{ label, percent }`.
+// The first window over its line, or null.
 export function overLine(limits: readonly Limit[]): { label: string; percent: number } | null {
   for (const l of limits) {
     const line = LIMIT_LINE[l.kind as keyof typeof LIMIT_LINE]
@@ -40,12 +38,11 @@ export function overLine(limits: readonly Limit[]): { label: string; percent: nu
   return null
 }
 
-// The TTL Claude Code's environment or settings pin, or null when they leave
-// the choice automatic, in the order Claude Code (2.1.301) checks them:
-// FORCE_PROMPT_CACHING_5M, then CLAUDE_CODE_PROMPT_CACHE_TTL ("5m" or "1h"),
-// then the `promptCacheTtl` settings key, then ENABLE_PROMPT_CACHING_1H.
-// (An agent's frontmatter sits between the setting and ENABLE_1H there; it
-// only reaches subagents, whose requests caffeine does not read.)
+// The TTL the environment or settings pin, or null if automatic, checked in
+// Claude Code's (2.1.301) order: FORCE_PROMPT_CACHING_5M, CLAUDE_CODE_PROMPT_CACHE_TTL
+// ("5m" or "1h"), the `promptCacheTtl` setting, ENABLE_PROMPT_CACHING_1H.
+// (Agent frontmatter sits before ENABLE_1H there, but only reaches subagents,
+// whose requests caffeine does not read.)
 export function ttlFromEnv(force5m: string | undefined, cacheTtl: string | undefined, settingTtl: unknown, enable1h: string | undefined): number | null {
   if (isSet(force5m)) return TTL_5M
   return parseTtl(cacheTtl) ?? parseTtl(settingTtl) ?? (isSet(enable1h) ? TTL_1H : null)
@@ -58,35 +55,31 @@ const parseTtl = (v: unknown): number | null => {
 
 const isSet = (v: string | undefined) => v !== undefined && v !== '' && v !== '0' && v.toLowerCase() !== 'false'
 
-// Claude Code's automatic choice: 1 hour on a Claude subscription within its
-// usage limits (the only sessions with rate-limit windows), else 5 minutes.
+// Claude Code's automatic choice: 1h on a subscription under its limits (only
+// subscriptions have rate-limit windows), else 5m.
 export function ttlByPlan(limits: readonly Limit[]): number {
   return limits.length > 0 && limits.every(l => l.percentUsed < 100) ? TTL_1H : TTL_5M
 }
 
-// The 1-hour TTL, when one request's cost proves it: the session's cost went
-// up by `delta` dollars for `u`, and only the cache write's rate is unknown.
-// The cost is Claude Code's estimate, not the bill, and it prices a write at
-// the 1-hour 2x only for the tokens the API reported under a 1-hour TTL (and
-// only when its price table has a 1-hour rate for the model); every other
-// write is priced at the 5-minute 1.25x. So 2x proves 1h, and 1.25x proves
-// nothing: it is a 5-minute write, or a 1-hour one priced as 5-minute.
-// Null when the request wrote too little to tell, the model's price is
-// unknown, or the rate is not 2x (1.25x, or another request, a subagent's,
-// landed in between).
-// Two things in the cost never reach the hook, which gets the four token
-// counts and the model alone (no inference_geo, no web search count): a web
-// search ($0.01 each) and the US multiplier below. So the cost is read twice,
-// as it is and with the multiplier taken off, and 2x from either is 1h; the
-// write has to be at least a quarter of the rest of the request so the two
-// readings cannot meet (a US 5-minute write reads under 1.8x as it is, a
-// 1-hour write elsewhere under 1.85x with the multiplier taken off), and the
-// write has to be large enough that one web search moves its rate by less
-// than the tolerance, so a search cannot carry a 5-minute write to 2x: over
-// 100k tokens on Haiku ($1), 50k on Sonnet 5, 25k on Opus 5.5, 10k on Fable.
-// Several searches or a subagent's cost in the same delta can still land on
-// 2x by chance; a cold cache inside the hour with no 2x reading of its own
-// takes the reading back (register.tsx).
+// 1h when one request's cost proves it: the session cost rose by `delta`
+// dollars for `u`, and only the cache write's rate is unknown. The cost is
+// Claude Code's estimate, not the bill: it prices a write at the 1h 2x only
+// for tokens the API reported under a 1h TTL (and only if its price table has
+// a 1h rate for the model), every other write at the 5m 1.25x. So 2x proves
+// 1h, and 1.25x proves nothing (a 5m write, or a 1h one priced as 5m).
+// Null when the write is too small to tell, the price is unknown, or the rate
+// is not 2x (1.25x, or a subagent's request landed in between).
+// Two charges never reach the hook, which gets only the four token counts and
+// the model (no inference_geo, no web search count): a web search ($0.01
+// each) and the US multiplier. So the cost is read as is and with the
+// multiplier off, and 2x from either is 1h. The write must be at least a
+// quarter of the rest of the request so the two readings cannot meet (a US 5m
+// write reads under 1.8x as is, a 1h write elsewhere under 1.85x with the
+// multiplier off), and large enough that one search moves its rate by less
+// than the tolerance, so a search cannot carry a 5m write to 2x: over 100k
+// tokens on Haiku ($1), 50k on Sonnet 5, 25k on Opus 5.5, 10k on Fable.
+// Several searches or a subagent's cost can still land on 2x by chance; a cold
+// cache inside the hour with no 2x reading of its own takes it back (register.tsx).
 export function ttlFromCost(delta: number, u: Usage, model: string): number | null {
   const price = inputPrice(model)
   if (price === null || u.cache_creation_input_tokens < 1000 || !(delta > 0)) {
@@ -100,17 +93,17 @@ export function ttlFromCost(delta: number, u: Usage, model: string): number | nu
   return [delta, delta / US_MULTIPLIER].some(usd => Math.abs(rateOf(usd) - 2) < RATE_TOLERANCE) ? TTL_1H : null
 }
 
-// how far from 2x a write's rate may read and still count as a 1-hour write
+// how far from 2x a write's rate may read and still count as 1h
 const RATE_TOLERANCE = 0.1
 
-// what Claude Code adds to the cost for one web search, flat (never multiplied by the US x1.1)
+// Claude Code's flat charge per web search (never multiplied by the US x1.1)
 const WEB_SEARCH_USD = 0.01
 
-// Claude Code's cost estimate (2.1.301) multiplies a request's whole cost by
-// 1.1 when the API's usage says inference_geo "us"; no other region has one.
+// Claude Code's estimate (2.1.301) multiplies a request's whole cost by 1.1
+// when usage says inference_geo "us"; no other region has one.
 export const US_MULTIPLIER = 1.1
 
-// When the next poke goes out, given the last request, or null with none yet.
+// When the next poke is due, or null before the first request.
 export function nextPokeAt(lastAt: number, every: number): number | null {
   return lastAt > 0 ? lastAt + every : null
 }
@@ -189,10 +182,9 @@ export function span(ms: number): string {
   return `${s}s`
 }
 
-// What a request costs, in input-token equivalents (base input price = 1),
-// by the API's own ratios: output 5x, cache writes 1.25x (5m) or 2x (1h),
-// cache reads 0.1x, except 0.05x on Opus 5.5 and 0.025x on Fable 5.1 and
-// Mythos 5.1.
+// Request cost in input-token equivalents (base input = 1), by the API's
+// ratios: output 5x, cache writes 1.25x (5m) or 2x (1h), cache reads 0.1x,
+// except 0.05x on Opus 5.5 and 0.025x on Fable 5.1 and Mythos 5.1.
 export function readRate(model: string): number {
   if (/fable-5-1|mythos-5-1/.test(model)) return 0.025
   if (/opus-5-5/.test(model)) return 0.05
@@ -239,13 +231,12 @@ export function dollars(equiv: number, model: string): string {
   return usd < 0.01 ? 'under $0.01' : `about $${usd.toFixed(2)}`
 }
 
-// What one main-thread request says about the cache from its timing alone, as
-// Cache Keeper reads it: the gap since the request before, and how the prompt
-// split between reading the cache and writing it. Past 5.5 minutes a 5-minute
-// cache has expired, so a mostly-read prompt proves the 1-hour TTL, and a
-// mostly-written one means the cache had gone cold (under an hour: a 5-minute
-// TTL, unless something else rewrote it, which `isExempt` says: the first
-// request after a compaction or a model switch). Small prompts say nothing.
+// What one main-thread request's timing says about the cache, as Cache Keeper
+// reads it: the gap since the last request, and the prompt's read/write split.
+// Past 5.5 minutes a 5m cache has expired, so a mostly-read prompt proves 1h,
+// and a mostly-written one means the cache went cold (under an hour: a 5m TTL,
+// unless `isExempt`, the first request after a compaction or model switch).
+// Small prompts say nothing.
 export type Reading = { isCold: boolean; ttl: number | null }
 
 export const GAP = 5.5 * minute
@@ -270,10 +261,9 @@ export function pokeWasCold(u: Usage): boolean {
   return u.cache_creation_input_tokens > 0.1 * u.cache_read_input_tokens
 }
 
-// The cup on the row: how warm the cache is, as a coffee's temperature from
-// 100F (just written or read) down to 40F (expired), the steam over it
-// thinning as it cools, and a color from red to blue. `frame` shimmers the
-// steam.
+// The cup: cache warmth as a coffee's temperature, 100F (just written or read)
+// to 40F (expired), the steam thinning and the color going red to blue as it
+// cools. `frame` shimmers the steam.
 export type Warmth = { degrees: number; steam: string; color: string }
 
 const STEAM = [['   '], [' ~ ', '  ~'], ['≈ ≈', ' ≈≈'], ['≋≋≋', '≈≋≈']]

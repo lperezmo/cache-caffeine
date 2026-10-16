@@ -21,9 +21,10 @@ Near the usage limit a second row offers the wake:
 
 ## Install
 
+From the Anthropic plugin directory, no marketplace to add:
+
 ```
-/plugin marketplace add lperezmo/cache-caffeine
-/plugin install cache-caffeine@cache-caffeine
+/plugin install cache-caffeine@anthropic-plugin-directory
 ```
 
 Needs Claude Code 2.1.287 or newer (mods on by default).

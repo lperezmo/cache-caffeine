@@ -568,6 +568,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'caffeine',
       description: 'Keep the prompt cache warm while you step away, and wake Claude when the usage limit resets',
+      argumentHint: '[on|off|status|warm|until|wake|ttl|every|idle|auto|cost|poke|message|band|forever|help]',
     })
     const started = await next(e)
     await load($, c)

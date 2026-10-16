@@ -40,16 +40,20 @@ export function overLine(limits: readonly Limit[]): { label: string; percent: nu
   return null
 }
 
-// The TTL Claude Code's environment pins, or null when it leaves the choice
-// automatic: CLAUDE_CODE_PROMPT_CACHE_TTL ("5m" or "1h") wins, then
-// FORCE_PROMPT_CACHING_5M, then ENABLE_PROMPT_CACHING_1H.
-export function ttlFromEnv(cacheTtl: string | undefined, force5m: string | undefined, enable1h: string | undefined): number | null {
-  const v = cacheTtl?.trim().toLowerCase()
-  if (v === '1h') return TTL_1H
-  if (v === '5m') return TTL_5M
+// The TTL Claude Code's environment or settings pin, or null when they leave
+// the choice automatic, in the order Claude Code (2.1.301) checks them:
+// FORCE_PROMPT_CACHING_5M, then CLAUDE_CODE_PROMPT_CACHE_TTL ("5m" or "1h"),
+// then the `promptCacheTtl` settings key, then ENABLE_PROMPT_CACHING_1H.
+// (An agent's frontmatter sits between the setting and ENABLE_1H there; it
+// only reaches subagents, whose requests caffeine does not read.)
+export function ttlFromEnv(force5m: string | undefined, cacheTtl: string | undefined, settingTtl: unknown, enable1h: string | undefined): number | null {
   if (isSet(force5m)) return TTL_5M
-  if (isSet(enable1h)) return TTL_1H
-  return null
+  return parseTtl(cacheTtl) ?? parseTtl(settingTtl) ?? (isSet(enable1h) ? TTL_1H : null)
+}
+
+const parseTtl = (v: unknown): number | null => {
+  const t = typeof v === 'string' ? v.trim().toLowerCase() : ''
+  return t === '1h' ? TTL_1H : t === '5m' ? TTL_5M : null
 }
 
 const isSet = (v: string | undefined) => v !== undefined && v !== '' && v !== '0' && v.toLowerCase() !== 'false'
@@ -60,22 +64,51 @@ export function ttlByPlan(limits: readonly Limit[]): number {
   return limits.length > 0 && limits.every(l => l.percentUsed < 100) ? TTL_1H : TTL_5M
 }
 
-// The TTL one request was written at, read off what it cost: the session's
-// cost went up by `delta` dollars for `u`, and only the cache write's rate is
-// unknown (2x for 1h, 1.25x for 5m). Null when the request wrote too little
-// to tell, the model's price is unknown, or the rate fits neither (another
-// request, a subagent's, landed in between).
+// The 1-hour TTL, when one request's cost proves it: the session's cost went
+// up by `delta` dollars for `u`, and only the cache write's rate is unknown.
+// The cost is Claude Code's estimate, not the bill, and it prices a write at
+// the 1-hour 2x only for the tokens the API reported under a 1-hour TTL (and
+// only when its price table has a 1-hour rate for the model); every other
+// write is priced at the 5-minute 1.25x. So 2x proves 1h, and 1.25x proves
+// nothing: it is a 5-minute write, or a 1-hour one priced as 5-minute.
+// Null when the request wrote too little to tell, the model's price is
+// unknown, or the rate is not 2x (1.25x, or another request, a subagent's,
+// landed in between).
+// Two things in the cost never reach the hook, which gets the four token
+// counts and the model alone (no inference_geo, no web search count): a web
+// search ($0.01 each) and the US multiplier below. So the cost is read twice,
+// as it is and with the multiplier taken off, and 2x from either is 1h; the
+// write has to be at least a quarter of the rest of the request so the two
+// readings cannot meet (a US 5-minute write reads under 1.8x as it is, a
+// 1-hour write elsewhere under 1.85x with the multiplier taken off), and the
+// write has to be large enough that one web search moves its rate by less
+// than the tolerance, so a search cannot carry a 5-minute write to 2x: over
+// 100k tokens on Haiku ($1), 50k on Sonnet 5, 25k on Opus 5.5, 10k on Fable.
+// Several searches or a subagent's cost in the same delta can still land on
+// 2x by chance; a cold cache inside the hour with no 2x reading of its own
+// takes the reading back (register.tsx).
 export function ttlFromCost(delta: number, u: Usage, model: string): number | null {
   const price = inputPrice(model)
   if (price === null || u.cache_creation_input_tokens < 1000 || !(delta > 0)) {
     return null
   }
   const rest = u.input_tokens + u.output_tokens * 5 + u.cache_read_input_tokens * readRate(model)
-  const rate = ((delta * 1e6) / price - rest) / u.cache_creation_input_tokens
-  if (Math.abs(rate - 2) < 0.1) return TTL_1H
-  if (Math.abs(rate - 1.25) < 0.1) return TTL_5M
-  return null
+  if (rest > 4 * u.cache_creation_input_tokens || (u.cache_creation_input_tokens * price * RATE_TOLERANCE) / 1e6 <= WEB_SEARCH_USD) {
+    return null
+  }
+  const rateOf = (usd: number) => ((usd * 1e6) / price - rest) / u.cache_creation_input_tokens
+  return [delta, delta / US_MULTIPLIER].some(usd => Math.abs(rateOf(usd) - 2) < RATE_TOLERANCE) ? TTL_1H : null
 }
+
+// how far from 2x a write's rate may read and still count as a 1-hour write
+const RATE_TOLERANCE = 0.1
+
+// what Claude Code adds to the cost for one web search, flat (never multiplied by the US x1.1)
+const WEB_SEARCH_USD = 0.01
+
+// Claude Code's cost estimate (2.1.301) multiplies a request's whole cost by
+// 1.1 when the API's usage says inference_geo "us"; no other region has one.
+export const US_MULTIPLIER = 1.1
 
 // When the next poke goes out, given the last request, or null with none yet.
 export function nextPokeAt(lastAt: number, every: number): number | null {

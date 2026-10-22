@@ -23,7 +23,6 @@ import {
   TTL_5M,
   ttlByPlan,
   ttlFromCost,
-  ttlFromEnv,
   warmth,
   writeRate,
 } from './brew'
@@ -63,10 +62,9 @@ type Caffeine = Brew & {
   limits: Limit[]
   context: number
   model: string
-  // the TTL sources, in ttlOf's order: the person's override, the environment, a 1h cost
+  // the TTL sources, in ttlOf's order: the person's override, a 1h cost
   // reading, request timing; else Claude Code's choice by plan
   ttl: number | null
-  envTtl: number | null
   // only ever 1h (a 1.25x cost cannot tell 5m from 1h); cleared by a cache found cold
   // inside the hour, unless that request priced at 1h itself
   measuredTtl: number | null
@@ -108,14 +106,12 @@ const MINUTE = 60_000
 // `/caffeine warm` alone
 const WARM = 60 * MINUTE
 
-// env first (Claude Code reads them before picking by plan, so a cost that
-// contradicts them is a misread), then a 1h-priced request, then timing, then the plan
-const ttlOf = (c: Caffeine) => c.ttl ?? c.envTtl ?? c.measuredTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
+// a 1h-priced request, then timing, then the plan
+const ttlOf = (c: Caffeine) => c.ttl ?? c.measuredTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
 
 // Where the TTL comes from, for /caffeine status.
 function ttlSource(c: Caffeine): string {
   if (c.ttl !== null) return 'set with /caffeine ttl'
-  if (c.envTtl !== null) return 'from the environment'
   if (c.measuredTtl !== null) return 'measured from what requests cost'
   if (c.timedTtl !== null) return 'measured from request timing'
   if (c.limits.length) return 'the subscription default'
@@ -146,15 +142,6 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
   c.idle = (await setting($, 'idle', DEFAULT_IDLE)) || DEFAULT_IDLE
   c.ttl = (await setting($, 'ttl', null)) as number | null
   c.autoAt = await setting($, 'autoAt', 0)
-  try {
-    c.envTtl = ttlFromEnv(
-      await $.env.get('FORCE_PROMPT_CACHING_5M'),
-      await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'),
-      await $.env.get('ENABLE_PROMPT_CACHING_1H'),
-    )
-  } catch {
-    c.envTtl = null
-  }
 }
 
 async function keep($: EngineInterface, c: Caffeine): Promise<void> {
@@ -552,7 +539,6 @@ export const register: Register = (on) => {
     context: 0,
     model: '',
     ttl: null,
-    envTtl: null,
     measuredTtl: null,
     isPriced: false,
     timedTtl: null,

@@ -29,7 +29,6 @@ import {
   TTL_5M,
   ttlByPlan,
   ttlFromCost,
-  ttlFromEnv,
   wasWarm,
 } from '../hooks/brew'
 
@@ -79,15 +78,6 @@ test('durations, times and the cadence', () => {
   expect(span(45_000)).toBe('45s')
   expect(defaultEvery(TTL_1H)).toBe(48 * MIN)
   expect(defaultEvery(TTL_5M)).toBe(4 * MIN)
-  // Claude Code's order: FORCE_5M, CLAUDE_CODE_PROMPT_CACHE_TTL, ENABLE_1H
-  expect(ttlFromEnv(undefined, undefined, '1')).toBe(TTL_1H)
-  expect(ttlFromEnv('1', undefined, '1')).toBe(TTL_5M)
-  expect(ttlFromEnv('1', '1h', undefined)).toBe(TTL_5M)
-  expect(ttlFromEnv(undefined, '1h', undefined)).toBe(TTL_1H)
-  expect(ttlFromEnv(undefined, '5m', '1')).toBe(TTL_5M)
-  expect(ttlFromEnv(undefined, ' 1H ', undefined)).toBe(TTL_1H)
-  expect(ttlFromEnv(undefined, undefined, undefined)).toBeNull()
-  expect(ttlFromEnv(undefined, undefined, '0')).toBeNull()
   expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 19 }])).toBe(TTL_1H)
   expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 100 }])).toBe(TTL_5M)
   expect(ttlByPlan([])).toBe(TTL_5M)
@@ -276,8 +266,7 @@ const run = ($: Engine, args: string) =>
 
 test('on, it pokes 48 minutes after the last request on a 1h cache, and not on a cold one', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
-  mock.store(on)
-  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  mock.store(on, { ttl: TTL_1H })
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -317,7 +306,6 @@ test('on, it pokes 48 minutes after the last request on a 1h cache, and not on a
 test('the band toggles it, edits the message, and draws what is beneath', async ($, on) => {
   mock.clock(on, { now: at(9, 0) })
   mock.store(on)
-  mock.env(on, {})
   world(on, [])
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
 
@@ -355,7 +343,6 @@ test('the band toggles it, edits the message, and draws what is beneath', async 
 test('it wears off, turns itself off when idle, and pauses near the usage limit', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
-  mock.env(on, {})
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -455,7 +442,6 @@ test('cost: per-model cache read rates and the poke against a rewrite', () => {
 test('near the limit the band offers a wake; a press books it and keeps the cache warm until it fires', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
-  mock.env(on, {})
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -506,7 +492,6 @@ test('a booked wake survives a reload of the mod', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   // the test host has no session id, which reads as ''
   mock.store(on, { wake: { session: '', at: at(12, 0), label: '5h' } })
-  mock.env(on, {})
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -520,7 +505,6 @@ test('a booked wake survives a reload of the mod', async ($, on) => {
 test('a wake at a time says so, unless it was given words of its own', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
-  mock.env(on, {})
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -545,8 +529,7 @@ test('a wake at a time says so, unless it was given words of its own', async ($,
 
 test('auto turns it on past the context size, once; away 1h; cost reads the session', async ($, on) => {
   mock.clock(on, { now: at(9, 0) })
-  mock.store(on)
-  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  mock.store(on, { ttl: TTL_1H })
   world(on, [])
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   const measure = (n: number) =>
@@ -588,7 +571,6 @@ test('auto turns it on past the context size, once; away 1h; cost reads the sess
 test('a 5m-rate cost leaves the subscription at 1h; a 1h-rate cost proves it', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
-  mock.env(on, {})
   const submitted: string[] = []
   world(on, submitted)
   sessionCost = 0
@@ -632,7 +614,6 @@ test('a 5m-rate cost leaves the subscription at 1h; a 1h-rate cost proves it', a
 // A Haiku session with a 1h reading (a 120k write at 2x), 20 minutes before the next request.
 async function measured1h($: Engine, on: On, time: ReturnType<typeof mock.clock>, submitted: string[]) {
   mock.store(on)
-  mock.env(on, {})
   world(on, submitted)
   sessionCost = 0
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -688,7 +669,6 @@ test('a rewrite inside the hour at the 1h rate keeps the reading: a prefix chang
 test('a chance 1h cost reading is taken back by a cold cache inside the hour; pokes go back to 4 minutes', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
-  mock.env(on, {})
   const submitted: string[] = []
   world(on, submitted)
   sessionCost = 0
@@ -740,10 +720,9 @@ test('a chance 1h cost reading is taken back by a cold cache inside the hour; po
   expect(submitted.length).toBe(2)
 })
 
-test('the environment outranks a cost reading: Claude Code reads it first', async ($, on) => {
+test('a pinned TTL outranks a cost reading', async ($, on) => {
   mock.clock(on, { now: at(9, 0) })
-  mock.store(on)
-  mock.env(on, { FORCE_PROMPT_CACHING_5M: '1' })
+  mock.store(on, { ttl: TTL_5M })
   world(on, [])
   sessionCost = 0
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -763,7 +742,7 @@ test('the environment outranks a cost reading: Claude Code reads it first', asyn
     },
     haiku,
   )
-  expect((await run($, 'status')).text).toContain('Cache TTL 5m (from the environment)')
+  expect((await run($, 'status')).text).toContain('Cache TTL 5m (set with /caffeine ttl)')
   expect((await run($, 'on')).text).toContain('poking 4m after the last request (5m cache)')
 })
 
@@ -791,7 +770,6 @@ test('timing: a read after 5.5 minutes proves 1h, a rewrite under an hour means 
 test('a poke that finds the cache cold turns caffeine off; timing sets the TTL where cost cannot', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
   mock.store(on)
-  mock.env(on, {})
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -830,8 +808,7 @@ const SUMMARY = [{ role: 'user', text: 'the summary', toolUses: [] }]
 
 test('a compaction or a /clear holds the pokes until the next message, and its rewrite is not a cold poke', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
-  mock.store(on)
-  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  mock.store(on, { ttl: TTL_1H })
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -881,8 +858,7 @@ test('a compaction or a /clear holds the pokes until the next message, and its r
 
 test('a poke that is the first request on another model writes the cache without turning off', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
-  mock.store(on)
-  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  mock.store(on, { ttl: TTL_1H })
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
@@ -920,8 +896,7 @@ test('the cup cools from 100F with steam to 40F without', () => {
 
 test('the band draws the cup: --F before a reply, then the temperature, cooling', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
-  mock.store(on)
-  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
+  mock.store(on, { ttl: TTL_1H })
   world(on, [])
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   const mount = () =>

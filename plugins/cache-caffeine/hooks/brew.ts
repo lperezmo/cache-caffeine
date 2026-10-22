@@ -38,28 +38,6 @@ export function overLine(limits: readonly Limit[]): { label: string; percent: nu
   return null
 }
 
-// The TTL the environment pins, or null if automatic, checked in Claude Code's
-// (2.1.301) order: FORCE_PROMPT_CACHING_5M, CLAUDE_CODE_PROMPT_CACHE_TTL ("5m" or
-// "1h"), ENABLE_PROMPT_CACHING_1H. The `promptCacheTtl` setting is left to cost and
-// timing: reading it would mean reading every setting.
-// (Agent frontmatter sits before ENABLE_1H there, but only reaches subagents,
-// whose requests caffeine does not read.)
-export function ttlFromEnv(
-  force5m: string | undefined,
-  cacheTtl: string | undefined,
-  enable1h: string | undefined,
-): number | null {
-  if (isSet(force5m)) return TTL_5M
-  return parseTtl(cacheTtl) ?? (isSet(enable1h) ? TTL_1H : null)
-}
-
-const parseTtl = (v: string | undefined): number | null => {
-  const t = typeof v === 'string' ? v.trim().toLowerCase() : ''
-  return t === '1h' ? TTL_1H : t === '5m' ? TTL_5M : null
-}
-
-const isSet = (v: string | undefined) => v !== undefined && v !== '' && v !== '0' && v.toLowerCase() !== 'false'
-
 // Claude Code's automatic choice: 1h on a subscription under its limits (only
 // subscriptions have rate-limit windows), else 5m.
 export function ttlByPlan(limits: readonly Limit[]): number {

@@ -60,11 +60,10 @@ The row above the prompt has the switch (`t`), the message editor (`e`), and how
 - It is off until you turn it on, and only for that session. It waits while Claude is working and pauses when the 5-hour window is over 90% or the weekly one over 95%.
 - It skips the poke once the cache has expired, since that would only write it again. If a poke finds the cache cold anyway (it writes more than a tenth of what it reads), caffeine turns itself off and says so. A compaction or `/clear` empties the cache, so pokes wait for your next message to write it again; a poke that had to write it anyway (the first after a compaction or model switch) never counts as cold.
 - It turns itself off after 8 hours without a turn of your own (change it with `/caffeine idle`), unless you confirm `/caffeine forever` for that run.
-- **What it reads:** the session's usage figures from Claude Code (per-request token counts, the running cost estimate, the 5-hour and weekly limit windows) and three environment variables, `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL` and `ENABLE_PROMPT_CACHING_1H`. It does not read your Claude Code settings. From those it works out the cache TTL, first match wins:
-  1. The variables, in the order Claude Code checks them (they pin the TTL before Claude Code picks one by plan).
-  2. A request whose cost shows a 1-hour write: 2x input, on a write too large for a web search's charge to explain. A 1.25x write could be either TTL, since Claude Code's estimate prices at the 5-minute rate any write the API did not report under a 1-hour TTL. A cache found cold inside the hour takes a 1-hour reading back, unless that request priced at 1 hour itself.
-  3. Request timing: the cache still read after more than 5 minutes idle means 1 hour; written again inside the hour means 5 minutes.
-  4. Claude Code's default for your plan.
+- **What it reads:** the session's usage figures from Claude Code (per-request token counts, the running cost estimate, the 5-hour and weekly limit windows). It does not read your Claude Code settings or environment variables, so if you pin the TTL with `FORCE_PROMPT_CACHING_5M`, `CLAUDE_CODE_PROMPT_CACHE_TTL` or `ENABLE_PROMPT_CACHING_1H`, tell caffeine too with `/caffeine ttl`. From the usage figures it works out the cache TTL, first match wins:
+  1. A request whose cost shows a 1-hour write: 2x input, on a write too large for a web search's charge to explain. A 1.25x write could be either TTL, since Claude Code's estimate prices at the 5-minute rate any write the API did not report under a 1-hour TTL. A cache found cold inside the hour takes a 1-hour reading back, unless that request priced at 1 hour itself.
+  2. Request timing: the cache still read after more than 5 minutes idle means 1 hour; written again inside the hour means 5 minutes.
+  3. Claude Code's default for your plan.
 
   None of it goes into a poke or a wake prompt. It reads no files and makes no network requests.
 

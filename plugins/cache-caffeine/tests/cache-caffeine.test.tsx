@@ -224,6 +224,8 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('session.compact', ($, e) => ({ messages: e.messages }) as never)
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  // A step handler must be a generator even when it streams nothing.
+  // eslint-disable-next-line require-yield
   on('turn.step', async function* ($, e) {
     if (sessionCost !== undefined) sessionCost += stepCost
     return {
@@ -844,7 +846,7 @@ test('a compaction or a /clear holds the pokes until the next message, and its r
   mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
   const submitted: string[] = []
   world(on, submitted)
-  await $.session.start({ cwd: 'D:\work', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   const wrote = {
     input_tokens: 10,
     output_tokens: 3,
@@ -895,7 +897,7 @@ test('a poke that is the first request on another model writes the cache without
   mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
   const submitted: string[] = []
   world(on, submitted)
-  await $.session.start({ cwd: 'D:\work', surface: 'terminal', isInteractive: true })
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   const wrote = {
     input_tokens: 10,
     output_tokens: 3,

@@ -43,7 +43,12 @@ export function overLine(limits: readonly Limit[]): { label: string; percent: nu
 // ("5m" or "1h"), the `promptCacheTtl` setting, ENABLE_PROMPT_CACHING_1H.
 // (Agent frontmatter sits before ENABLE_1H there, but only reaches subagents,
 // whose requests caffeine does not read.)
-export function ttlFromEnv(force5m: string | undefined, cacheTtl: string | undefined, settingTtl: unknown, enable1h: string | undefined): number | null {
+export function ttlFromEnv(
+  force5m: string | undefined,
+  cacheTtl: string | undefined,
+  settingTtl: unknown,
+  enable1h: string | undefined,
+): number | null {
   if (isSet(force5m)) return TTL_5M
   return parseTtl(cacheTtl) ?? parseTtl(settingTtl) ?? (isSet(enable1h) ? TTL_1H : null)
 }
@@ -58,7 +63,7 @@ const isSet = (v: string | undefined) => v !== undefined && v !== '' && v !== '0
 // Claude Code's automatic choice: 1h on a subscription under its limits (only
 // subscriptions have rate-limit windows), else 5m.
 export function ttlByPlan(limits: readonly Limit[]): number {
-  return limits.length > 0 && limits.every(l => l.percentUsed < 100) ? TTL_1H : TTL_5M
+  return limits.length > 0 && limits.every((l) => l.percentUsed < 100) ? TTL_1H : TTL_5M
 }
 
 // 1h when one request's cost proves it: the session cost rose by `delta`
@@ -86,11 +91,14 @@ export function ttlFromCost(delta: number, u: Usage, model: string): number | nu
     return null
   }
   const rest = u.input_tokens + u.output_tokens * 5 + u.cache_read_input_tokens * readRate(model)
-  if (rest > 4 * u.cache_creation_input_tokens || (u.cache_creation_input_tokens * price * RATE_TOLERANCE) / 1e6 <= WEB_SEARCH_USD) {
+  if (
+    rest > 4 * u.cache_creation_input_tokens ||
+    (u.cache_creation_input_tokens * price * RATE_TOLERANCE) / 1e6 <= WEB_SEARCH_USD
+  ) {
     return null
   }
   const rateOf = (usd: number) => ((usd * 1e6) / price - rest) / u.cache_creation_input_tokens
-  return [delta, delta / US_MULTIPLIER].some(usd => Math.abs(rateOf(usd) - 2) < RATE_TOLERANCE) ? TTL_1H : null
+  return [delta, delta / US_MULTIPLIER].some((usd) => Math.abs(rateOf(usd) - 2) < RATE_TOLERANCE) ? TTL_1H : null
 }
 
 // how far from 2x a write's rate may read and still count as 1h
@@ -109,7 +117,9 @@ export function nextPokeAt(lastAt: number, every: number): number | null {
 }
 
 // A cache read larger than what the request had to write again: still warm.
-export function wasWarm(usage: { cache_read_input_tokens: number; cache_creation_input_tokens: number } | undefined): boolean | null {
+export function wasWarm(
+  usage: { cache_read_input_tokens: number; cache_creation_input_tokens: number } | undefined,
+): boolean | null {
   if (!usage) return null
   return usage.cache_read_input_tokens > usage.cache_creation_input_tokens
 }
@@ -207,14 +217,29 @@ export function inputPrice(model: string): number | null {
   return PRICES.find(([re]) => re.test(model))?.[1] ?? null
 }
 
-export type Usage = { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number }
+export type Usage = {
+  input_tokens: number
+  output_tokens: number
+  cache_read_input_tokens: number
+  cache_creation_input_tokens: number
+}
 
 export function equivalents(u: Usage, model: string, ttl: number): number {
-  return u.input_tokens + u.output_tokens * 5 + u.cache_read_input_tokens * readRate(model) + u.cache_creation_input_tokens * writeRate(ttl)
+  return (
+    u.input_tokens +
+    u.output_tokens * 5 +
+    u.cache_read_input_tokens * readRate(model) +
+    u.cache_creation_input_tokens * writeRate(ttl)
+  )
 }
 
 // A poke over `context` cached tokens: the read, plus a short exchange.
-export const pokeGuess = (context: number): Usage => ({ input_tokens: 40, output_tokens: 10, cache_read_input_tokens: context, cache_creation_input_tokens: 60 })
+export const pokeGuess = (context: number): Usage => ({
+  input_tokens: 40,
+  output_tokens: 10,
+  cache_read_input_tokens: context,
+  cache_creation_input_tokens: 60,
+})
 
 // 7.3k, 284k, 1.2M.
 export function sized(n: number): string {
@@ -273,6 +298,15 @@ export function warmth(left: number, ttl: number, frame = 0): Warmth {
   const degrees = Math.round(40 + 60 * f)
   const level = degrees >= 85 ? 3 : degrees >= 65 ? 2 : degrees >= 48 ? 1 : 0
   const frames = STEAM[level]!
-  const color = degrees >= 85 ? '#ff5a36' : degrees >= 70 ? '#ff9a3c' : degrees >= 55 ? '#f2c94c' : degrees > 40 ? '#9cb8d8' : '#5b8fd9'
+  const color =
+    degrees >= 85
+      ? '#ff5a36'
+      : degrees >= 70
+        ? '#ff9a3c'
+        : degrees >= 55
+          ? '#f2c94c'
+          : degrees > 40
+            ? '#9cb8d8'
+            : '#5b8fd9'
   return { degrees, steam: frames[frame % frames.length]!, color }
 }

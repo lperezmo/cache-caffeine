@@ -79,17 +79,15 @@ test('durations, times and the cadence', () => {
   expect(span(45_000)).toBe('45s')
   expect(defaultEvery(TTL_1H)).toBe(48 * MIN)
   expect(defaultEvery(TTL_5M)).toBe(4 * MIN)
-  // Claude Code's order: FORCE_5M, CLAUDE_CODE_PROMPT_CACHE_TTL, the promptCacheTtl setting, ENABLE_1H
-  expect(ttlFromEnv(undefined, undefined, undefined, '1')).toBe(TTL_1H)
-  expect(ttlFromEnv('1', undefined, undefined, '1')).toBe(TTL_5M)
-  expect(ttlFromEnv('1', '1h', '1h', undefined)).toBe(TTL_5M)
-  expect(ttlFromEnv(undefined, '1h', '5m', undefined)).toBe(TTL_1H)
-  expect(ttlFromEnv(undefined, '5m', '1h', '1')).toBe(TTL_5M)
-  expect(ttlFromEnv(undefined, undefined, '5m', '1')).toBe(TTL_5M)
-  expect(ttlFromEnv(undefined, undefined, '1h', undefined)).toBe(TTL_1H)
-  expect(ttlFromEnv(undefined, undefined, 42, undefined)).toBeNull()
-  expect(ttlFromEnv(undefined, undefined, undefined, undefined)).toBeNull()
-  expect(ttlFromEnv(undefined, undefined, undefined, '0')).toBeNull()
+  // Claude Code's order: FORCE_5M, CLAUDE_CODE_PROMPT_CACHE_TTL, ENABLE_1H
+  expect(ttlFromEnv(undefined, undefined, '1')).toBe(TTL_1H)
+  expect(ttlFromEnv('1', undefined, '1')).toBe(TTL_5M)
+  expect(ttlFromEnv('1', '1h', undefined)).toBe(TTL_5M)
+  expect(ttlFromEnv(undefined, '1h', undefined)).toBe(TTL_1H)
+  expect(ttlFromEnv(undefined, '5m', '1')).toBe(TTL_5M)
+  expect(ttlFromEnv(undefined, ' 1H ', undefined)).toBe(TTL_1H)
+  expect(ttlFromEnv(undefined, undefined, undefined)).toBeNull()
+  expect(ttlFromEnv(undefined, undefined, '0')).toBeNull()
   expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 19 }])).toBe(TTL_1H)
   expect(ttlByPlan([{ kind: 'five_hour', percentUsed: 100 }])).toBe(TTL_5M)
   expect(ttlByPlan([])).toBe(TTL_5M)
@@ -767,16 +765,6 @@ test('the environment outranks a cost reading: Claude Code reads it first', asyn
   )
   expect((await run($, 'status')).text).toContain('Cache TTL 5m (from the environment)')
   expect((await run($, 'on')).text).toContain('poking 4m after the last request (5m cache)')
-})
-
-test('the promptCacheTtl setting counts as the environment does, under CLAUDE_CODE_PROMPT_CACHE_TTL', async ($, on) => {
-  mock.clock(on, { now: at(9, 0) })
-  mock.store(on)
-  mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
-  on('settings.read', () => ({ value: { promptCacheTtl: '5m' } }) as never)
-  world(on, [])
-  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
-  expect((await run($, 'status')).text).toContain('Cache TTL 5m (from the environment)')
 })
 
 test('timing: a read after 5.5 minutes proves 1h, a rewrite under an hour means 5m, exempt after a compaction', () => {

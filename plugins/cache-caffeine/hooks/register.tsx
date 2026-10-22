@@ -108,7 +108,7 @@ const MINUTE = 60_000
 // `/caffeine warm` alone
 const WARM = 60 * MINUTE
 
-// env and settings first (Claude Code reads them before picking by plan, so a cost that
+// env first (Claude Code reads them before picking by plan, so a cost that
 // contradicts them is a misread), then a 1h-priced request, then timing, then the plan
 const ttlOf = (c: Caffeine) => c.ttl ?? c.envTtl ?? c.measuredTtl ?? c.timedTtl ?? ttlByPlan(c.limits)
 
@@ -146,18 +146,10 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
   c.idle = (await setting($, 'idle', DEFAULT_IDLE)) || DEFAULT_IDLE
   c.ttl = (await setting($, 'ttl', null)) as number | null
   c.autoAt = await setting($, 'autoAt', 0)
-  // merged settings, as Claude Code reads them; a failed read leaves the key unset
-  let promptCacheTtl: unknown
-  try {
-    promptCacheTtl = (await $.settings.read()).promptCacheTtl
-  } catch {
-    promptCacheTtl = undefined
-  }
   try {
     c.envTtl = ttlFromEnv(
       await $.env.get('FORCE_PROMPT_CACHING_5M'),
       await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL'),
-      promptCacheTtl,
       await $.env.get('ENABLE_PROMPT_CACHING_1H'),
     )
   } catch {

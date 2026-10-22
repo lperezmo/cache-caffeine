@@ -2,9 +2,36 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { blocking, DEFAULT_TIMER_WAKE, DEFAULT_WAKE, isNear, MARK, parseWake, parseWhen, wakeAfter } from '../hooks/wake'
+import {
+  blocking,
+  DEFAULT_TIMER_WAKE,
+  DEFAULT_WAKE,
+  isNear,
+  MARK,
+  parseWake,
+  parseWhen,
+  wakeAfter,
+} from '../hooks/wake'
 import { pokeWasCold, readTiming, warmth } from '../hooks/brew'
-import { clock, defaultEvery, dollars, equivalents, readRate, sized, nextPokeAt, overLine, parseClock, parseDuration, span, TTL_1H, TTL_5M, ttlByPlan, ttlFromCost, ttlFromEnv, wasWarm } from '../hooks/brew'
+import {
+  clock,
+  defaultEvery,
+  dollars,
+  equivalents,
+  readRate,
+  sized,
+  nextPokeAt,
+  overLine,
+  parseClock,
+  parseDuration,
+  span,
+  TTL_1H,
+  TTL_5M,
+  ttlByPlan,
+  ttlFromCost,
+  ttlFromEnv,
+  wasWarm,
+} from '../hooks/brew'
 
 const PROPS = {
   hasSurvey: false,
@@ -68,26 +95,79 @@ test('durations, times and the cadence', () => {
   expect(ttlByPlan([])).toBe(TTL_5M)
   // two Haiku 1h writes (2x), too large for a web search's $0.01 to explain
   const haiku = 'claude-haiku-4-5-20251001'
-  expect(ttlFromCost(0.242322, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, haiku)).toBe(TTL_1H)
-  expect(ttlFromCost(0.303015, { input_tokens: 10, output_tokens: 74, cache_read_input_tokens: 26348, cache_creation_input_tokens: 150_000 }, haiku)).toBe(TTL_1H)
+  expect(
+    ttlFromCost(
+      0.242322,
+      { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 },
+      haiku,
+    ),
+  ).toBe(TTL_1H)
+  expect(
+    ttlFromCost(
+      0.303015,
+      { input_tokens: 10, output_tokens: 74, cache_read_input_tokens: 26348, cache_creation_input_tokens: 150_000 },
+      haiku,
+    ),
+  ).toBe(TTL_1H)
   // 1.25x is a 5m write, or a 1h one priced at the 5m rate: proves nothing
-  expect(ttlFromCost(0.152267, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, haiku)).toBeNull()
+  expect(
+    ttlFromCost(
+      0.152267,
+      { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 },
+      haiku,
+    ),
+  ).toBeNull()
   // a real Haiku 2x, but a 5.8k write: one web search moves its rate by 1.7, so proves nothing
-  expect(ttlFromCost(0.013878, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 }, haiku)).toBeNull()
+  expect(
+    ttlFromCost(
+      0.013878,
+      { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 5778 },
+      haiku,
+    ),
+  ).toBeNull()
   // too little written to tell, an unknown price, a subagent's cost mixed in
-  expect(ttlFromCost(0.002, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 200 }, haiku)).toBeNull()
-  expect(ttlFromCost(0.2423, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, 'other')).toBeNull()
-  expect(ttlFromCost(0.3, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 }, haiku)).toBeNull()
+  expect(
+    ttlFromCost(
+      0.002,
+      { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 200 },
+      haiku,
+    ),
+  ).toBeNull()
+  expect(
+    ttlFromCost(
+      0.2423,
+      { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 },
+      'other',
+    ),
+  ).toBeNull()
+  expect(
+    ttlFromCost(
+      0.3,
+      { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 },
+      haiku,
+    ),
+  ).toBeNull()
   // US requests cost x1.1, unseen by the hook (no inference_geo): a 1h write (0.2510, US 0.2761)
   // proves 1h either way, a 5m one (0.1610, US 0.1771) proves nothing
   const sonnet = 'claude-sonnet-5-5'
-  const us = { input_tokens: 10, output_tokens: 300, cache_read_input_tokens: 40_000, cache_creation_input_tokens: 60_000 }
+  const us = {
+    input_tokens: 10,
+    output_tokens: 300,
+    cache_read_input_tokens: 40_000,
+    cache_creation_input_tokens: 60_000,
+  }
   expect(ttlFromCost(0.25102, us, sonnet)).toBe(TTL_1H)
   expect(ttlFromCost(0.276122, us, sonnet)).toBe(TTL_1H)
   expect(ttlFromCost(0.16102, us, sonnet)).toBeNull()
   expect(ttlFromCost(0.177122, us, sonnet)).toBeNull()
   // a write small against the read says nothing even at 2x: the x1.1 on the read alone could explain it
-  expect(ttlFromCost(0.104, { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 3000 }, 'claude-opus-5-5')).toBeNull()
+  expect(
+    ttlFromCost(
+      0.104,
+      { input_tokens: 10, output_tokens: 0, cache_read_input_tokens: 400_000, cache_creation_input_tokens: 3000 },
+      'claude-opus-5-5',
+    ),
+  ).toBeNull()
   expect(nextPokeAt(0, MIN)).toBeNull()
   expect(nextPokeAt(1000, MIN)).toBe(1000 + MIN)
   expect(wasWarm({ cache_read_input_tokens: 90_000, cache_creation_input_tokens: 200 })).toBe(true)
@@ -109,7 +189,9 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('tool.call', ($, e) => {
     if (e.tool === 'CronCreate') {
       crons.push({ cron: String(e.cron), prompt: String(e.prompt) })
-      return { result: { id: ['job1', 'job2', 'job3'][crons.length - 1] ?? 'job', humanSchedule: 'once', recurring: false } }
+      return {
+        result: { id: ['job1', 'job2', 'job3'][crons.length - 1] ?? 'job', humanSchedule: 'once', recurring: false },
+      }
     }
     if (e.tool === 'CronDelete') return { result: { id: String(e.id) } }
     if (e.tool === 'CronList') return { result: { jobs: [] } }
@@ -128,7 +210,11 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   sessionCost = undefined
   stepCost = 0
-  on('session.usage', () => ({ value: { rateLimits: [], ...(sessionCost === undefined ? {} : { cost: { usd: sessionCost } }) } }) as never)
+  on(
+    'session.usage',
+    () =>
+      ({ value: { rateLimits: [], ...(sessionCost === undefined ? {} : { cost: { usd: sessionCost } }) } }) as never,
+  )
   on('session.measure', ($, e) => ({ changed: e.changed }) as never)
   on('prompt.submit', ($, e) => {
     submitted.push(e.text)
@@ -138,9 +224,18 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
   on('session.compact', ($, e) => ({ messages: e.messages }) as never)
   on('session.end', ($, e) => ({ sessionId: e.sessionId }) as never)
   on('turn.complete', ($, e) => ({ text: e.answer }))
+  // A step handler must be a generator even when it streams nothing.
+  // eslint-disable-next-line require-yield
   on('turn.step', async function* ($, e) {
     if (sessionCost !== undefined) sessionCost += stepCost
-    return { turnId: e.turnId, index: e.index, answer: 'okay', toolUses: [], stopReason: 'end_turn', usage: stepResult } as never
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: 'okay',
+      toolUses: [],
+      stopReason: 'end_turn',
+      usage: stepResult,
+    } as never
   })
   // what another mod (clawd-buddy) or the engine draws in the band beneath caffeine
   on('ui.render', ($, e) => {
@@ -150,17 +245,36 @@ function world(on: On, submitted: string[], crons: { cron: string; prompt: strin
 }
 
 // One main-thread turn: its start, one request, its end.
-async function turn($: Engine, id: string, text: string, usage?: object, stepUsage?: object, model = 'claude-opus-5-5') {
+async function turn(
+  $: Engine,
+  id: string,
+  text: string,
+  usage?: object,
+  stepUsage?: object,
+  model = 'claude-opus-5-5',
+) {
   await $.turn.start({ text, turnId: id })
   stepResult = stepUsage ?? null
   for await (const _ of $.turn.step({ turnId: id, index: 0, model, messageCount: 3 } as never)) {
     // nothing streams
   }
-  await $.turn.complete({ answer: 'okay', durationMs: 900, isAborted: false, turnId: id, reason: 'answer', usage } as never)
+  await $.turn.complete({
+    answer: 'okay',
+    durationMs: 900,
+    isAborted: false,
+    turnId: id,
+    reason: 'answer',
+    usage,
+  } as never)
 }
 
 const run = ($: Engine, args: string) =>
-  $.command.run({ command: 'caffeine', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
+  $.command.run({
+    command: 'caffeine',
+    args,
+    origin: { kind: 'composer' },
+    presentation: { isFullscreen: false, columns: 100 },
+  })
 
 test('on, it pokes 48 minutes after the last request on a 1h cache, and not on a cold one', async ($, on) => {
   const time = mock.clock(on, { now: at(9, 0) })
@@ -178,7 +292,13 @@ test('on, it pokes 48 minutes after the last request on a 1h cache, and not on a
   expect(submitted).toEqual(['poke, just say okay'])
 
   // the poke's own turn: warm, counted, and the next one 48 minutes after it
-  await turn($, 't2', 'poke, just say okay', { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 40, model: 'claude-opus-5-5' })
+  await turn($, 't2', 'poke, just say okay', {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 90_000,
+    cache_creation_input_tokens: 40,
+    model: 'claude-opus-5-5',
+  })
   expect((await run($, 'status')).text).toContain('1 poke')
   expect((await run($, 'status')).text).toContain('found the cache warm')
   await time.advance(48 * MIN + 5_000)
@@ -320,7 +440,12 @@ test('cost: per-model cache read rates and the poke against a rewrite', () => {
   expect(readRate('claude-opus-5-5')).toBe(0.05)
   expect(readRate('claude-fable-5-1')).toBe(0.025)
   expect(readRate('claude-sonnet-5-5')).toBe(0.1)
-  const poke = { input_tokens: 40, output_tokens: 10, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 60 }
+  const poke = {
+    input_tokens: 40,
+    output_tokens: 10,
+    cache_read_input_tokens: 100_000,
+    cache_creation_input_tokens: 60,
+  }
   expect(equivalents(poke, 'claude-opus-5-5', 3_600_000)).toBe(40 + 50 + 5000 + 120)
   expect(sized(284_000)).toBe('284k')
   expect(sized(7300)).toBe('7.3k')
@@ -343,7 +468,8 @@ test('near the limit the band offers a wake; a press books it and keeps the cach
     rateLimits: [{ kind: 'five_hour', percentUsed: 96, resetsAt: new Date(resetsAt).toISOString() }],
   } as never)
 
-  const mount = () => $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  const mount = () =>
+    $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   let ui = await mount()
   expect(JSON.stringify(await ui.drawn())).toContain('5h limit 96%')
   expect(await ui.find({ key: 'beneath' })).toBeDefined()
@@ -367,9 +493,9 @@ test('near the limit the band offers a wake; a press books it and keeps the cach
   expect((await run($, '90 minutes')).text).toContain('Booking the wake for 10:30 (in 1h 30m)')
   await time.advance(100)
   await time.advance(89 * MIN)
-  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([])
+  expect(submitted.filter((t) => t.startsWith(MARK))).toEqual([])
   await time.advance(1 * MIN + 5_000)
-  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} run the tests again`])
+  expect(submitted.filter((t) => t.startsWith(MARK))).toEqual([`${MARK} run the tests again`])
   expect((await run($, 'status')).text).toContain('Wake: none booked.')
   expect((await run($, 'wake auto on')).text).toContain('on.')
   expect((await run($, 'wake nonsense')).text).toContain('Not a time I know')
@@ -390,7 +516,7 @@ test('a booked wake survives a reload of the mod', async ($, on) => {
   expect((await run($, 'status')).text).toContain('Wake: Claude continues at 12:00')
   // a limit wake says the limit reset
   for (let i = 0; i < 18; i++) await time.advance(10 * MIN)
-  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_WAKE}`])
+  expect(submitted.filter((t) => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_WAKE}`])
 })
 
 test('a wake at a time says so, unless it was given words of its own', async ($, on) => {
@@ -403,7 +529,7 @@ test('a wake at a time says so, unless it was given words of its own', async ($,
   expect((await run($, '1 min')).text).toContain('(in 1m)')
   await time.advance(100)
   await time.advance(1 * MIN)
-  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_TIMER_WAKE}`])
+  expect(submitted.filter((t) => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_TIMER_WAKE}`])
   // the wake's own turn runs before the next prompt can go out
   await turn($, 'w1', submitted.at(-1)!)
   expect((await run($, '2 min check the build')).text).toContain('(in 2m), to say: check the build')
@@ -411,7 +537,10 @@ test('a wake at a time says so, unless it was given words of its own', async ($,
   expect((await run($, 'status')).text).toContain('told: check the build')
   // the 5s tick that comes after the wake time sends it
   await time.advance(2 * MIN + 5_000)
-  expect(submitted.filter(t => t.startsWith(MARK))).toEqual([`${MARK} ${DEFAULT_TIMER_WAKE}`, `${MARK} check the build`])
+  expect(submitted.filter((t) => t.startsWith(MARK))).toEqual([
+    `${MARK} ${DEFAULT_TIMER_WAKE}`,
+    `${MARK} check the build`,
+  ])
   expect((await run($, 'wake prompt be brief')).text).toContain('be brief')
   expect((await run($, 'wake prompt default')).text).toContain('Back to the defaults')
 })
@@ -423,7 +552,11 @@ test('auto turns it on past the context size, once; away 1h; cost reads the sess
   world(on, [])
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   const measure = (n: number) =>
-    $.session.measure({ changed: ['context'], context: { tokens: n, max: 1_000_000, percent: n / 1e4 }, rateLimits: [] } as never)
+    $.session.measure({
+      changed: ['context'],
+      context: { tokens: n, max: 1_000_000, percent: n / 1e4 },
+      rateLimits: [],
+    } as never)
 
   expect((await run($, 'cost')).text).toContain('No reply yet')
   expect((await run($, 'auto 100k')).text).toContain('passes 100k tokens')
@@ -474,7 +607,12 @@ test('a 5m-rate cost leaves the subscription at 1h; a 1h-rate cost proves it', a
   }
 
   // a 1.25x write: the cost cannot tell, so the subscription's 1h stands
-  await request('t1', 0.009781, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 6011 })
+  await request('t1', 0.009781, {
+    input_tokens: 10,
+    output_tokens: 40,
+    cache_read_input_tokens: 20570,
+    cache_creation_input_tokens: 6011,
+  })
   expect((await run($, 'status')).text).toContain('Cache TTL 1h (the subscription default)')
   await run($, 'on')
   await time.advance(4 * MIN + 5_000)
@@ -484,7 +622,12 @@ test('a 5m-rate cost leaves the subscription at 1h; a 1h-rate cost proves it', a
 
   // a write priced at 2x proves 1h, whatever the plan says
   await run($, 'off')
-  await request('t2', 0.290265, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 500_000, cache_creation_input_tokens: 120_000 })
+  await request('t2', 0.290265, {
+    input_tokens: 10,
+    output_tokens: 51,
+    cache_read_input_tokens: 500_000,
+    cache_creation_input_tokens: 120_000,
+  })
   expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
 })
 
@@ -505,7 +648,12 @@ async function measured1h($: Engine, on: On, time: ReturnType<typeof mock.clock>
     stepCost = cost
     await turn($, id, text, { ...usage, model: haiku }, { ...usage, model: haiku }, haiku)
   }
-  await request('t1', 'work', 0.242322, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000 })
+  await request('t1', 'work', 0.242322, {
+    input_tokens: 10,
+    output_tokens: 51,
+    cache_read_input_tokens: 20570,
+    cache_creation_input_tokens: 120_000,
+  })
   expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
   await time.advance(20 * MIN)
   return request
@@ -515,7 +663,12 @@ test('a turn that finds the cache cold inside the hour, with no 1h reading of it
   const time = mock.clock(on, { now: at(9, 0) })
   const request = await measured1h($, on, time, [])
   // rewritten 20 minutes in, at no cost caffeine can read: timing's 5m stands
-  await request('t2', 'more', 0, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 89_000 })
+  await request('t2', 'more', 0, {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 1_000,
+    cache_creation_input_tokens: 89_000,
+  })
   const status = (await run($, 'status')).text
   expect(status).toContain('Cache TTL 5m (measured from request timing)')
   expect(status).not.toContain('measured from what requests cost')
@@ -525,7 +678,12 @@ test('a rewrite inside the hour at the 1h rate keeps the reading: a prefix chang
   const time = mock.clock(on, { now: at(9, 0) })
   const request = await measured1h($, on, time, [])
   // an MCP reconnect changed the prefix: the rewrite prices at 2x again (0.240125), so 1h holds over timing's 5m
-  await request('t2', 'more', 0.240125, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 120_000 })
+  await request('t2', 'more', 0.240125, {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 1_000,
+    cache_creation_input_tokens: 120_000,
+  })
   expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
 })
 
@@ -549,14 +707,24 @@ test('a chance 1h cost reading is taken back by a cold cache inside the hour; po
   }
 
   // a 5m write (0.139767) plus a subagent's $0.0825 in the same delta (indistinguishable to the hook) reads as 1h
-  await request('t1', 'work', 0.222267, { input_tokens: 10, output_tokens: 40, cache_read_input_tokens: 20570, cache_creation_input_tokens: 110_000 })
+  await request('t1', 'work', 0.222267, {
+    input_tokens: 10,
+    output_tokens: 40,
+    cache_read_input_tokens: 20570,
+    cache_creation_input_tokens: 110_000,
+  })
   expect((await run($, 'status')).text).toContain('Cache TTL 1h (measured from what requests cost)')
   await run($, 'on')
   await time.advance(48 * MIN + 5_000)
   expect(submitted.length).toBe(1)
 
   // the poke finds the cache cold 48 minutes in: the reading is gone, timing says 5m, and caffeine is off
-  await request('p1', 'poke, just say okay', 0, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 89_000 })
+  await request('p1', 'poke, just say okay', 0, {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 1_000,
+    cache_creation_input_tokens: 89_000,
+  })
   const status = (await run($, 'status')).text
   expect(status).toContain('caffeine off')
   expect(status).toContain('Cache TTL 5m (measured from request timing)')
@@ -564,7 +732,12 @@ test('a chance 1h cost reading is taken back by a cold cache inside the hour; po
 
   // on again: the next request's poke comes 4 minutes after it
   await run($, 'on')
-  await request('t2', 'back', 0, { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 40 })
+  await request('t2', 'back', 0, {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 90_000,
+    cache_creation_input_tokens: 40,
+  })
   await time.advance(4 * MIN + 5_000)
   expect(submitted.length).toBe(2)
 })
@@ -578,7 +751,20 @@ test('the environment outranks a cost reading: Claude Code reads it first', asyn
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
   const haiku = 'claude-haiku-4-5-20251001'
   stepCost = 0.242322
-  await turn($, 't1', 'work', undefined, { input_tokens: 10, output_tokens: 51, cache_read_input_tokens: 20570, cache_creation_input_tokens: 120_000, model: haiku }, haiku)
+  await turn(
+    $,
+    't1',
+    'work',
+    undefined,
+    {
+      input_tokens: 10,
+      output_tokens: 51,
+      cache_read_input_tokens: 20570,
+      cache_creation_input_tokens: 120_000,
+      model: haiku,
+    },
+    haiku,
+  )
   expect((await run($, 'status')).text).toContain('Cache TTL 5m (from the environment)')
   expect((await run($, 'on')).text).toContain('poking 4m after the last request (5m cache)')
 })
@@ -595,13 +781,21 @@ test('the promptCacheTtl setting counts as the environment does, under CLAUDE_CO
 
 test('timing: a read after 5.5 minutes proves 1h, a rewrite under an hour means 5m, exempt after a compaction', () => {
   const read = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 300 }
-  const wrote = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 2_000, cache_creation_input_tokens: 88_000 }
+  const wrote = {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_read_input_tokens: 2_000,
+    cache_creation_input_tokens: 88_000,
+  }
   expect(readTiming(20 * MIN, read, false)).toEqual({ isCold: false, ttl: TTL_1H })
   expect(readTiming(4 * MIN, read, false)).toEqual({ isCold: false, ttl: null })
   expect(readTiming(20 * MIN, wrote, false)).toEqual({ isCold: true, ttl: TTL_5M })
   expect(readTiming(90 * MIN, wrote, false)).toEqual({ isCold: true, ttl: null })
   expect(readTiming(20 * MIN, wrote, true)).toEqual({ isCold: false, ttl: null })
-  expect(readTiming(20 * MIN, { ...wrote, cache_creation_input_tokens: 8_000 }, false)).toEqual({ isCold: false, ttl: null })
+  expect(readTiming(20 * MIN, { ...wrote, cache_creation_input_tokens: 8_000 }, false)).toEqual({
+    isCold: false,
+    ttl: null,
+  })
   expect(pokeWasCold(read)).toBe(false)
   expect(pokeWasCold(wrote)).toBe(true)
 })
@@ -613,7 +807,13 @@ test('a poke that finds the cache cold turns caffeine off; timing sets the TTL w
   const submitted: string[] = []
   world(on, submitted)
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
-  const big = { input_tokens: 10, output_tokens: 5, cache_read_input_tokens: 90_000, cache_creation_input_tokens: 300, model: 'some-new-model' }
+  const big = {
+    input_tokens: 10,
+    output_tokens: 5,
+    cache_read_input_tokens: 90_000,
+    cache_creation_input_tokens: 300,
+    model: 'some-new-model',
+  }
 
   // a request read the cache after 20 minutes: the TTL is 1h, measured from timing
   await turn($, 't1', 'hello', undefined, big)
@@ -624,7 +824,13 @@ test('a poke that finds the cache cold turns caffeine off; timing sets the TTL w
   await run($, 'on')
   await time.advance(48 * MIN + 5_000)
   expect(submitted.length).toBe(1)
-  const cold = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 89_000, model: 'some-new-model' }
+  const cold = {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 1_000,
+    cache_creation_input_tokens: 89_000,
+    model: 'some-new-model',
+  }
   await turn($, 'p1', 'poke, just say okay', cold, cold)
   const status = (await run($, 'status')).text
   expect(status).toContain('caffeine off')
@@ -640,9 +846,21 @@ test('a compaction or a /clear holds the pokes until the next message, and its r
   mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
   const submitted: string[] = []
   world(on, submitted)
-  await $.session.start({ cwd: 'D:\work', surface: 'terminal', isInteractive: true })
-  const wrote = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 57_000, model: 'claude-opus-5-5' }
-  const read = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 57_000, cache_creation_input_tokens: 40, model: 'claude-opus-5-5' }
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  const wrote = {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 1_000,
+    cache_creation_input_tokens: 57_000,
+    model: 'claude-opus-5-5',
+  }
+  const read = {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 57_000,
+    cache_creation_input_tokens: 40,
+    model: 'claude-opus-5-5',
+  }
 
   await run($, 'on')
   await turn($, 't1', 'fix the tests')
@@ -679,8 +897,14 @@ test('a poke that is the first request on another model writes the cache without
   mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
   const submitted: string[] = []
   world(on, submitted)
-  await $.session.start({ cwd: 'D:\work', surface: 'terminal', isInteractive: true })
-  const wrote = { input_tokens: 10, output_tokens: 3, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 57_000, model: 'claude-sonnet-5-5' }
+  await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
+  const wrote = {
+    input_tokens: 10,
+    output_tokens: 3,
+    cache_read_input_tokens: 1_000,
+    cache_creation_input_tokens: 57_000,
+    model: 'claude-sonnet-5-5',
+  }
 
   await run($, 'on')
   await turn($, 't1', 'fix the tests')
@@ -712,7 +936,8 @@ test('the band draws the cup: --F before a reply, then the temperature, cooling'
   mock.env(on, { ENABLE_PROMPT_CACHING_1H: '1' })
   world(on, [])
   await $.session.start({ cwd: 'D:\\work', surface: 'terminal', isInteractive: true })
-  const mount = () => $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
+  const mount = () =>
+    $.ui.mount({ plugin: 'cache-caffeine', surface: 'terminal', component: 'AbovePrompt', props: PROPS })
   let ui = await mount()
   let drawn = JSON.stringify(await ui.drawn())
   expect(drawn).toContain('c[_]')

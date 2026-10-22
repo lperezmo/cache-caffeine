@@ -32,12 +32,12 @@ function window(l: Limit): Block | null {
 // week outlasts a 5-hour reset); with none full, the 5-hour one.
 export function blocking(limits: readonly Limit[]): Block | null {
   const windows = limits.map(window).filter((w): w is Block => w !== null)
-  const full = windows.filter(w => w.percent >= 100).sort((a, b) => b.resetsAt - a.resetsAt)
-  return full[0] ?? windows.find(w => w.label === '5h') ?? null
+  const full = windows.filter((w) => w.percent >= 100).sort((a, b) => b.resetsAt - a.resetsAt)
+  return full[0] ?? windows.find((w) => w.label === '5h') ?? null
 }
 
 export function isNear(limits: readonly Limit[]): boolean {
-  return limits.some(l => {
+  return limits.some((l) => {
     const line = NEAR[l.kind as keyof typeof NEAR]
     return line !== undefined && l.percentUsed >= line
   })

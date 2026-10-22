@@ -166,7 +166,14 @@ async function load($: EngineInterface, c: Caffeine): Promise<void> {
 }
 
 async function keep($: EngineInterface, c: Caffeine): Promise<void> {
-  const kept: Brew = { isOn: c.isOn, until: c.until, lastAt: c.lastAt, activeAt: c.activeAt, isAutoDeclined: c.isAutoDeclined, isForever: c.isForever }
+  const kept: Brew = {
+    isOn: c.isOn,
+    until: c.until,
+    lastAt: c.lastAt,
+    activeAt: c.activeAt,
+    isAutoDeclined: c.isAutoDeclined,
+    isForever: c.isForever,
+  }
   await update($, brew, () => kept).catch(() => undefined)
 }
 
@@ -175,7 +182,9 @@ function howLong(c: Caffeine, now: number): string {
   if (c.until) {
     return `until ${clock(c.until, now)} (${span(c.until - now)} left)`
   }
-  return c.isForever || c.armed ? 'until you turn it off' : `until you turn it off (or ${span(c.idle).replace(' 00m', '')} idle)`
+  return c.isForever || c.armed
+    ? 'until you turn it off'
+    : `until you turn it off (or ${span(c.idle).replace(' 00m', '')} idle)`
 }
 
 // One line for the band, the status line and /caffeine status.
@@ -185,7 +194,7 @@ function describe(c: Caffeine, now: number): { text: string; color?: string; isD
   }
   const tail = [c.pokes ? `${c.pokes} poke${c.pokes === 1 ? '' : 's'}` : '', howLong(c, now)]
     .filter(Boolean)
-    .map(t => ` · ${t}`)
+    .map((t) => ` · ${t}`)
     .join('')
   const over = overLine(c.limits)
   if (over) {
@@ -342,7 +351,10 @@ async function arm($: EngineInterface, c: Caffeine, at: number, label: string, t
     c.isWakeLit = true
   }
   const now = await $.clock.now()
-  tell($, `Claude continues at ${clock(at, now)} (in ${span(at - now)})${label ? `, after the ${label} reset` : ''}, told: ${await wakeText($, c.armed)}. Keep this session open.`)
+  tell(
+    $,
+    `Claude continues at ${clock(at, now)} (in ${span(at - now)})${label ? `, after the ${label} reset` : ''}, told: ${await wakeText($, c.armed)}. Keep this session open.`,
+  )
   $.ui.invalidate('ui.render')
 }
 
@@ -411,7 +423,8 @@ async function armAtReset($: EngineInterface, c: Caffeine): Promise<void> {
   await arm($, c, wakeAfter(block.resetsAt), block.label)
 }
 
-const NO_RESET = 'No reset time yet: it comes with the first reply on a Pro or Max plan. /caffeine wake 14:30 picks a time.'
+const NO_RESET =
+  'No reset time yet: it comes with the first reply on a Pro or Max plan. /caffeine wake 14:30 picks a time.'
 
 async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promise<{ text: string }> {
   const [word = '', ...rest] = args.split(/\s+/)
@@ -432,12 +445,14 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
     }
     case 'off':
     case 'cancel':
-      $.clock.after(50, () => void disarm($, c).then(was => tell($, was ? 'wake cancelled.' : 'no wake was booked.')))
+      $.clock.after(50, () => void disarm($, c).then((was) => tell($, was ? 'wake cancelled.' : 'no wake was booked.')))
       return { text: 'Cancelling the wake…' }
     case 'prompt': {
       if (value.toLowerCase() === 'default') {
         await $.store.delete('wakePrompt')
-        return { text: `Back to the defaults: "${DEFAULT_WAKE}" after a limit reset, "${DEFAULT_TIMER_WAKE}" at a time.` }
+        return {
+          text: `Back to the defaults: "${DEFAULT_WAKE}" after a limit reset, "${DEFAULT_TIMER_WAKE}" at a time.`,
+        }
       }
       if (!value) {
         const mine = (await setting($, 'wakePrompt', null)) as string | null
@@ -457,7 +472,9 @@ async function wakeCommand($: EngineInterface, c: Caffeine, args: string): Promi
       if (wake === null) return { text: `Not a time I know: ${args}. Try 1 min, in 20 minutes, 14:30 or 3pm.` }
       const { at, text } = wake
       $.clock.after(50, () => void arm($, c, at, '', text))
-      return { text: `Booking the wake for ${clock(at, now)} (in ${span(at - now)})${text ? `, to say: ${text}` : ''}…` }
+      return {
+        text: `Booking the wake for ${clock(at, now)} (in ${span(at - now)})${text ? `, to say: ${text}` : ''}…`,
+      }
     }
   }
 }
@@ -489,7 +506,9 @@ async function forever($: EngineInterface, c: Caffeine, isSure: boolean): Promis
   c.isForever = true
   await keep($, c)
   await refresh($, c)
-  return { text: `Caffeine on with no end, until you turn it off. Next time you turn it on, the ${span(c.idle)} idle stop is back.` }
+  return {
+    text: `Caffeine on with no end, until you turn it off. Next time you turn it on, the ${span(c.idle)} idle stop is back.`,
+  }
 }
 
 const help = [
@@ -521,7 +540,7 @@ async function hold($: EngineInterface, c: Caffeine, by: string): Promise<void> 
   await refresh($, c)
 }
 
-export const register: Register = on => {
+export const register: Register = (on) => {
   const c: Caffeine = {
     isOn: false,
     until: 0,
@@ -590,7 +609,7 @@ export const register: Register = on => {
     })
     $.clock.every(1_200, () => {
       if (!c.isBanded || c.isEditing || !c.lastAt) return
-      void $.clock.now().then(now => {
+      void $.clock.now().then((now) => {
         if (cup(c, now)?.steam.trim()) {
           c.frame += 1
           $.ui.invalidate('ui.render')
@@ -613,7 +632,9 @@ export const register: Register = on => {
     if (block && block.percent >= 100 && !c.armed && (await setting($, 'wakeAuto', false))) {
       await armAtReset($, c)
     } else if (!wasNear && isNear(c.limits) && block) {
-      $.ui.toast(`caffeine: ${block.label} limit at ${block.percent}%, resets ${clock(block.resetsAt, await $.clock.now())}. /caffeine wake books a wake.`)
+      $.ui.toast(
+        `caffeine: ${block.label} limit at ${block.percent}%, resets ${clock(block.resetsAt, await $.clock.now())}. /caffeine wake books a wake.`,
+      )
     }
     $.ui.invalidate('ui.render')
     return next(e)
@@ -653,7 +674,10 @@ export const register: Register = on => {
     const result = yield* next(e)
     const after = await costNow($)
     if (result.usage) {
-      const priced = before !== null && after !== null ? ttlFromCost(after - before, result.usage, result.usage.model || e.model) : null
+      const priced =
+        before !== null && after !== null
+          ? ttlFromCost(after - before, result.usage, result.usage.model || e.model)
+          : null
       c.isPriced = priced !== null
       if (priced !== null) c.measuredTtl = priced
       const timing = readTiming(gap, result.usage, isExempt)
@@ -751,10 +775,14 @@ export const register: Register = on => {
       case '':
         if (c.isOn) c.isAutoDeclined = true
         await switchOn($, c, !c.isOn)
-        return { text: c.isOn ? `Caffeine on: ${describe(c, now).text.replace(/^caffeine on · /, '')}.` : 'Caffeine off.' }
+        return {
+          text: c.isOn ? `Caffeine on: ${describe(c, now).text.replace(/^caffeine on · /, '')}.` : 'Caffeine off.',
+        }
       case 'on':
         await switchOn($, c, true)
-        return { text: `Caffeine on until you turn it off, poking ${span(everyOf(c))} after the last request (${ttlLabel(ttlOf(c))} cache).` }
+        return {
+          text: `Caffeine on until you turn it off, poking ${span(everyOf(c))} after the last request (${ttlLabel(ttlOf(c))} cache).`,
+        }
       case 'off':
         c.isAutoDeclined = true
         await switchOn($, c, false)
@@ -775,7 +803,7 @@ export const register: Register = on => {
       case 'poke':
         if (c.poke !== 'none') return { text: 'A poke is already on its way.' }
         // a prompt submitted from inside this command would wait on the turn it holds
-        $.clock.after(50, () => void $.clock.now().then(t => poke($, c, t)))
+        $.clock.after(50, () => void $.clock.now().then((t) => poke($, c, t)))
         return { text: `Poking: ${c.message}` }
       case 'message':
       case 'say': {
@@ -785,12 +813,28 @@ export const register: Register = on => {
       }
       case 'auto': {
         const v = value.toLowerCase()
-        if (!v) return { text: c.autoAt ? `Caffeine turns on by itself past ${sized(c.autoAt)} tokens of context.` : 'Auto is off. /caffeine auto 100k turns it on.' }
-        const n = v === 'off' ? 0 : v === 'on' ? 100_000 : /^(\d+(?:\.\d+)?)(k|m)?$/.test(v) ? Math.round(Number.parseFloat(v) * (v.endsWith('m') ? 1e6 : v.endsWith('k') ? 1e3 : 1)) : null
+        if (!v)
+          return {
+            text: c.autoAt
+              ? `Caffeine turns on by itself past ${sized(c.autoAt)} tokens of context.`
+              : 'Auto is off. /caffeine auto 100k turns it on.',
+          }
+        const n =
+          v === 'off'
+            ? 0
+            : v === 'on'
+              ? 100_000
+              : /^(\d+(?:\.\d+)?)(k|m)?$/.test(v)
+                ? Math.round(Number.parseFloat(v) * (v.endsWith('m') ? 1e6 : v.endsWith('k') ? 1e3 : 1))
+                : null
         if (n === null || (n > 0 && n < 1000)) return { text: `Not a token count I know: ${value}. Try 100k, or off.` }
         c.autoAt = n
         await $.store.set('autoAt', n)
-        return { text: n ? `Caffeine turns on by itself once the context passes ${sized(n)} tokens (now ${sized(c.context)}).` : 'Auto off.' }
+        return {
+          text: n
+            ? `Caffeine turns on by itself once the context passes ${sized(n)} tokens (now ${sized(c.context)}).`
+            : 'Auto off.',
+        }
       }
       case 'cost':
         return { text: costLines(c).join('\n') }
@@ -803,7 +847,8 @@ export const register: Register = on => {
         }
         const ms = parseDuration(value)
         if (ms === null || ms < 30_000) return { text: `Not a duration I know (30s or more): ${value}.` }
-        if (ms >= ttlOf(c)) return { text: `${span(ms)} is past the ${ttlLabel(ttlOf(c))} cache: it would be cold by then.` }
+        if (ms >= ttlOf(c))
+          return { text: `${span(ms)} is past the ${ttlLabel(ttlOf(c))} cache: it would be cold by then.` }
         c.every = ms
         await $.store.set('every', ms)
         await refresh($, c)
@@ -816,7 +861,9 @@ export const register: Register = on => {
         c.ttl = ttl
         await $.store.set('ttl', ttl)
         await refresh($, c)
-        return { text: `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}); poking ${span(everyOf(c))} after the last request.` }
+        return {
+          text: `Cache TTL ${ttlLabel(ttlOf(c))} (${ttlSource(c)}); poking ${span(everyOf(c))} after the last request.`,
+        }
       }
       case 'forever':
         return forever($, c, value.toLowerCase() === 'yes')
@@ -826,7 +873,8 @@ export const register: Register = on => {
           return forever($, c, second === 'yes')
         }
         const ms = parseDuration(value)
-        if (ms === null) return { text: `Not a duration I know: ${value || '(none)'}. Try 8h, or off for no end this time.` }
+        if (ms === null)
+          return { text: `Not a duration I know: ${value || '(none)'}. Try 8h, or off for no end this time.` }
         c.idle = ms
         await $.store.set('idle', ms)
         return { text: `Caffeine turns itself off after ${span(ms)} without a turn of your own.` }
@@ -836,7 +884,11 @@ export const register: Register = on => {
         c.isBanded = v === 'on' ? true : v === 'off' ? false : !c.isBanded
         await $.store.set('band', c.isBanded)
         await refresh($, c)
-        return { text: c.isBanded ? 'Caffeine shows in its row above the prompt.' : 'Caffeine shows in the status line while on; no row above the prompt.' }
+        return {
+          text: c.isBanded
+            ? 'Caffeine shows in its row above the prompt.'
+            : 'Caffeine shows in the status line while on; no row above the prompt.',
+        }
       }
       case 'wake':
         return wakeCommand($, c, value)
@@ -849,7 +901,9 @@ export const register: Register = on => {
           c.lastWarm === null ? '' : `The last poke found the cache ${c.lastWarm ? 'warm' : 'cold'}.`,
           c.coldAt ? `The cache last went cold before ${clock(c.coldAt, now)}, after ${span(c.coldGap)} idle.` : '',
           `The poke says: ${c.message}`,
-          c.armed ? `Wake: Claude continues at ${clock(c.armed.at, now)} (in ${span(c.armed.at - now)}), told: ${await wakeText($, c.armed)}.` : 'Wake: none booked.',
+          c.armed
+            ? `Wake: Claude continues at ${clock(c.armed.at, now)} (in ${span(c.armed.at - now)}), told: ${await wakeText($, c.armed)}.`
+            : 'Wake: none booked.',
           block ? `${block.label} limit ${block.percent}%, resets ${clock(block.resetsAt, now)}.` : '',
         ]
         return { text: lines.filter(Boolean).join('\n') }
@@ -881,7 +935,13 @@ export const register: Register = on => {
         <Text key="wake-text" color="cyan" wrap="truncate-end">
           {`caffeine · Claude continues at ${clock(armed.at, now)} (in ${span(armed.at - now)})`}
         </Text>
-        <Button key="caffeine-wake-cancel" plain dimColor hotkey="n" onPress={() => void disarm($, c).then(() => tell($, 'wake cancelled.'))}>
+        <Button
+          key="caffeine-wake-cancel"
+          plain
+          dimColor
+          hotkey="n"
+          onPress={() => void disarm($, c).then(() => tell($, 'wake cancelled.'))}
+        >
           cancel
         </Button>
       </Box>
@@ -920,7 +980,7 @@ export const register: Register = on => {
           placeholder={DEFAULT_MESSAGE}
           submitLabel="save"
           autoFocus
-          onSubmit={text => void setMessage($, c, text).then(saved => tell($, `the poke now says: ${saved}`))}
+          onSubmit={(text) => void setMessage($, c, text).then((saved) => tell($, `the poke now says: ${saved}`))}
         />
         <Button
           key="caffeine-cancel"
@@ -955,20 +1015,20 @@ export const register: Register = on => {
             </Text>
           </Box>
           <Box key="caffeine-buttons" flexDirection="row" columnGap={2} flexShrink={0}>
-          <Button
-            key="caffeine-toggle"
-            plain
-            hotkey="t"
-            onPress={() => {
-              if (c.isOn) c.isAutoDeclined = true
-              void switchOn($, c, !c.isOn)
-            }}
-          >
-            {c.isOn ? 'turn off' : 'turn on'}
-          </Button>
-          <Button key="caffeine-edit" plain dimColor hotkey="e" onPress={() => void editInBand($, c)}>
-            message
-          </Button>
+            <Button
+              key="caffeine-toggle"
+              plain
+              hotkey="t"
+              onPress={() => {
+                if (c.isOn) c.isAutoDeclined = true
+                void switchOn($, c, !c.isOn)
+              }}
+            >
+              {c.isOn ? 'turn off' : 'turn on'}
+            </Button>
+            <Button key="caffeine-edit" plain dimColor hotkey="e" onPress={() => void editInBand($, c)}>
+              message
+            </Button>
           </Box>
         </Box>
       </Box>

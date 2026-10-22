@@ -13,14 +13,6 @@
   "privacyPolicyUrl": "https://github.com/lperezmo/cache-caffeine/blob/main/PRIVACY.md",
   "termsOfServiceUrl": "https://github.com/lperezmo/cache-caffeine/blob/main/LICENSE",
   "license": "MIT",
-  "keywords": [
-    "prompt cache",
-    "cache",
-    "keep warm",
-    "idle",
-    "usage limit",
-    "wake",
-    "mod"
-  ],
+  "keywords": ["prompt cache", "cache", "keep warm", "idle", "usage limit", "wake", "mod"],
   "types": "./types/index.d.ts"
 }
